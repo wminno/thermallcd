@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>thermallcd wireframe: panel strip + config editor</title>
+<style>
+  /* intentionally rough: system fonts, thin gray borders, no color */
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; } h2 { font-size: 14px; margin: 28px 0 8px; }
+  .note { font-size: 11px; color: #777; margin: 2px 0 10px; }
+  /* panel strip: 1920x462 scaled to 960x231 */
+  .panel { width: 960px; height: 231px; border: 1px solid #333; display: flex; background: #222; position: relative; }
+  .pane { width: 50%; border-right: 1px dashed #888; padding: 6px; color: #ddd; font-family: monospace; font-size: 9px; }
+  .widgets { width: 50%; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 4px; padding: 6px; }
+  .w { border: 1px solid #666; padding: 4px; font-size: 9px; color: #ccc; font-family: monospace; }
+  .w b { display: block; font-size: 9px; color: #eee; border-bottom: 1px dotted #555; margin-bottom: 4px; }
+  .bar { height: 5px; background: #444; margin: 2px 0; } .bar i { display: block; height: 5px; background: #999; }
+  .url { position: absolute; right: 6px; bottom: 2px; font-size: 8px; color: #777; }
+  /* config editor */
+  .editor { width: 960px; border: 1px solid #333; display: flex; background: #fafafa; }
+  .palette { width: 180px; border-right: 1px solid #999; padding: 8px; font-size: 11px; }
+  .palette div { border: 1px solid #999; padding: 6px; margin-bottom: 6px; background: #fff; }
+  .canvas { flex: 1; padding: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; min-height: 180px; }
+  .cell { border: 1px dashed #aaa; min-height: 60px; font-size: 10px; padding: 4px; background: #fff; }
+  .cell.sel { border: 2px solid #333; }
+  .controls { border-top: 1px solid #999; padding: 8px; font-size: 11px; display: flex; gap: 16px; }
+  .controls span { border: 1px solid #999; padding: 2px 8px; background: #fff; }
+</style>
+</head>
+<body>
+<!-- decision: two artifacts, one page. The panel strip is what strangers see in the README;
+     the editor is what contributors extend. Both render at the same canvas size (WYSIWYG). -->
+
+<h1>thermallcd wireframe</h1>
+
+<h2>1. The panel (1920x462, shown at 50%)</h2>
+<div class="note">nvtop stays left half as an image widget; right half is the drag-drop grid. URL always bottom right.</div>
+<div class="panel">
+  <div class="pane">nvtop (image widget, pty capture)<br>GPU0 ~~~~~~~ 87%<br>~~~~~~~~~~~<br>~~~~~~~~~~~~</div>
+  <div class="widgets">
+    <div class="w"><b>CPU</b><div class="bar"><i style="width:70%"></i></div>c0 42% c1 31%<div class="bar"><i style="width:40%"></i></div>c2 55% c3 28%</div>
+    <div class="w"><b>MEM</b>38.2/64G<div class="bar"><i style="width:59%"></i></div>swap 2.1/8G</div>
+    <div class="w"><b>GPU</b>busy 87%<div class="bar"><i style="width:87%"></i></div>VRAM 14/24G<div class="bar"><i style="width:58%"></i></div>temp 71C</div>
+    <div class="w"><b>NET</b>^ 42 MB/s<div class="bar"><i style="width:30%"></i></div>v 118 MB/s<div class="bar"><i style="width:80%"></i></div></div>
+    <div class="w"><b>CLOCK</b><br>14:42<br>Tue 07 Oct<br>up 3d 4h</div>
+    <div class="w"><b>LLM</b>qwen2-72b<br>41 tok/s<br>ctx 12k/32k<div class="bar"><i style="width:37%"></i></div></div>
+  </div>
+  <div class="url">http://192.168.x.x:8080 · token abcd</div>
+</div>
+
+<h2>2. Config editor (browser, token-protected, same widgets)</h2>
+<div class="note">Left: discovered widgets from widgets/ dir. Center: the live grid, drag to move, corner-drag to resize. Bottom: flair + burn-in shuffle.</div>
+<div class="editor">
+  <div class="palette">
+    <b style="font-size:10px">WIDGETS</b>
+    <div>cpu-load &nbsp;[+]</div>
+    <div>gpu-load &nbsp;[+]</div>
+    <div>disk-usage [+]</div>
+    <div>load-avg &nbsp;[+]</div>
+    <div>llm-tasks [+]</div>
+    <div>nvtop &nbsp;&nbsp;&nbsp;[+]</div>
+    <div>network &nbsp;[+]</div>
+  </div>
+  <div class="canvas">
+    <div class="grid">
+      <div class="cell sel">nvtop<br>3x2</div>
+      <div class="cell">cpu-load<br>1x1</div>
+      <div class="cell">gpu-load<br>1x1</div>
+      <div class="cell">mem<br>1x1</div>
+      <div class="cell">net<br>1x1</div>
+      <div class="cell">clock<br>1x1</div>
+      <div class="cell">llm-tasks<br>2x1</div>
+      <div class="cell">disk<br>1x1</div>
+    </div>
+    <div class="controls">
+      <span>flair: synthwave ▾</span><span>scanlines: on</span><span>shuffle: 15 min ▾</span><span>save</span>
+    </div>
+  </div>
+</div>
+
+<!-- decision: sizes are grid units (cols x rows), not pixels; the editor maps units to the
+     960x462 right half. Burn-in shuffle permutes widget positions on the timer, layout JSON saved server-side. -->
+</body>
+</html>
