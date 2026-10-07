@@ -1,0 +1,20 @@
+# third-party reference code (GPL upstreams, 436 MB) — vendored locally only
+reference/
+# local gstack scratch
+.gstack/
+# python
+__pycache__/
+*.pyc
+# session artifacts
+*.jpeg
+*.png
+tools/*.bin
+# machine-specific / sensitive: never commit
+*.local
+.env
+.env.*
+*.key
+*.pem
+*.token
+secrets/
+deploy/thermallcd.service
