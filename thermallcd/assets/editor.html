@@ -168,8 +168,10 @@ function nodes() {
 
 function snapshot() {
   if (loading) return;
+  var s = JSON.stringify(nodes());
+  if (ptr >= 0 && hist[ptr] === s) return;   // dedupe double-fire events
   hist = hist.slice(0, ptr + 1);
-  hist.push(JSON.stringify(nodes()));
+  hist.push(s);
   if (hist.length > 50) hist.shift();
   ptr = hist.length - 1;
   updateChrome();
@@ -193,6 +195,7 @@ function updateChrome() {
 function markDirty() { updateChrome(); }
 
 grid.on("change", function () { snapshot(); });
+grid.on("removed", function () { snapshot(); });  // deletions may not fire change
 
 // -- selection + delete (D31: click-to-select, delete button on the card) --
 function deselect() {
@@ -211,6 +214,8 @@ function select(itemEl) {
   b.className = "tlcd-del";
   b.title = "remove widget";
   b.textContent = "✕";
+  // keep GridStack's item-drag machinery from swallowing the press
+  b.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   b.addEventListener("click", function () { grid.removeWidget(itemEl); });
   itemEl.querySelector(".grid-stack-item-content").appendChild(b);
   selected = { el: itemEl };
@@ -256,6 +261,23 @@ saveBtn.addEventListener("click", function () {
 });
 
 // -- palette (D25: valid widgets addable; malformed listed with reason) --
+// item content: GridStack v12 renders `content` as TEXT, so chips are
+// appended through the DOM instead of passed as markup
+function renderChips() {
+  gridEl.querySelectorAll(".grid-stack-item").forEach(function (el) {
+    var node = el.gridstackNode;
+    var box = el.querySelector(".grid-stack-item-content");
+    var tag = box.querySelector(".tlcd-tag");
+    if (!tag) {
+      tag = document.createElement("div");
+      tag.className = "tlcd-tag";
+      box.appendChild(tag);
+    }
+    var w = widgetsByName[node && node.id];
+    tag.textContent = w ? (w.title || w.name) : (node && node.id) || "";
+  });
+}
+
 fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc) {
   var aside = document.getElementById("palette");
   doc.widgets.forEach(function (w) {
@@ -275,26 +297,26 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     btn.querySelector("span").textContent = (w.title || w.name);
     btn.querySelector(".badge").textContent = w.size.w + "x" + w.size.h;
     btn.addEventListener("click", function () {
-      grid.addWidget({ id: w.name, w: w.size.w, h: w.size.h,
-                       content: "<div class='tlcd-tag'>" +
-                                (w.title || w.name) + "</div>" });
+      grid.addWidget({ id: w.name, w: w.size.w, h: w.size.h });
+      renderChips();
     });
     aside.appendChild(btn);
   });
-});
 
-// -- initial layout, then the baseline snapshot --
-fetch("/api/layout?device=default").then(function (r) { return r.json(); })
-  .then(function (doc) {
-    loading = true;
-    grid.load(doc.widgets.map(function (it) {
-      return { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h };
-    }));
-    loading = false;
-    snapshot();
-    baselinePtr = ptr;
-    updateChrome();
-  });
+  // layout loads only after the registry is known, so chips resolve titles
+  return fetch("/api/layout?device=default").then(function (r) { return r.json(); });
+}).then(function (doc) {
+  if (!doc) return;
+  loading = true;
+  grid.load(doc.widgets.map(function (it) {
+    return { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h };
+  }));
+  loading = false;
+  renderChips();
+  snapshot();
+  baselinePtr = ptr;
+  updateChrome();
+});
 
 // -- D34 drawer toggle --
 document.getElementById("palette-toggle").addEventListener("click", function () {
