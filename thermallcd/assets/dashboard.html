@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>thermallcd</title>
+<script>window.TLCD_TOKEN=__TOKEN__;</script>
+<style>
+  html, body { margin: 0; width: 1920px; height: 462px; overflow: hidden; }
+  body {
+    /* scene layer (z 1): synthwave ground + grid horizon — static CSS for now;
+       the animated scene (synth.html port) lands with T13 and obeys --tlcd-tick */
+    background:
+      radial-gradient(120% 160% at 18% 110%, #2a0f3f 0%, rgba(42,15,63,0) 55%),
+      linear-gradient(180deg, #07060d 0%, #0d0821 55%, #160b2e 78%, #1d0f38 100%);
+    font-family: var(--tlcd-font-mono, monospace);
+  }
+  /* perspective grid hint, bottom band (z 1, part of the scene) */
+  body::before {
+    content: ""; position: absolute; inset: auto 0 0 0; height: 140px;
+    background:
+      linear-gradient(rgba(255,46,131,.22) 1px, transparent 1px) 0 0 / 100% 32px,
+      linear-gradient(90deg, rgba(255,46,131,.22) 1px, transparent 1px) 0 0 / 48px 100%;
+    transform: perspective(420px) rotateX(56deg) scale(1.6);
+    transform-origin: bottom;
+    opacity: .5;
+  }
+  /* neon sun accent, left third (z 1) */
+  body::after {
+    content: ""; position: absolute; left: 13%; top: 24%;
+    width: 150px; height: 150px; border-radius: 50%;
+    background: linear-gradient(180deg, #ff9a3d 0%, #ff2e83 62%, #b0186a 100%);
+    box-shadow: 0 0 60px rgba(255,46,131,.5);
+    mask: linear-gradient(180deg, #000 62%, transparent 62%) ;
+    -webkit-mask: linear-gradient(180deg, #000 62%, transparent 62%);
+    opacity: .85;
+  }
+  /* scanline overlay (z 3): uncapped by decision D36, tuned by eye at the visual pass */
+  .scanlines {
+    position: absolute; inset: 0; pointer-events: none; z-index: 3;
+    background: repeating-linear-gradient(180deg, rgba(0,0,0,.28) 0 1px, transparent 1px 3px);
+  }
+  /* glass widget panels (z 2) — grid 12x3 (D33) */
+  .grid {
+    position: absolute; inset: 16px; z-index: 2;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    gap: 8px;  /* D33 gutter */
+  }
+  .widget {
+    border: 1px solid rgba(40, 32, 67, .9);  /* hairline (D18 layer 2) */
+    border-radius: 6px;                       /* D33 radius */
+    background: rgba(15, 11, 29, .82);        /* adjustable glass (editor slider) */
+    backdrop-filter: blur(2px);
+    overflow: hidden;
+    opacity: 0;                               /* D22: fade in on first render */
+    animation: fadein .6s ease-out .1s forwards;
+  }
+  @keyframes fadein { to { opacity: 1; } }
+  /* URL watermark (z 4): scrim + minimum contrast (D20) */
+  .watermark {
+    position: absolute; right: 10px; bottom: 6px; z-index: 4;
+    font-family: monospace; font-size: 16px; color: #b9b2cc;
+    background: rgba(7, 6, 13, .55);          /* the scrim */
+    padding: 3px 10px; border-radius: 4px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    /*__FRAMES__*/
+  </div>
+  <div class="scanlines"></div>
+  <div class="watermark">/*__WATERMARK__*/</div>
+<script>
+  // D27: a saved layout change is visible on the panel within one second
+  (function pollLayout() {
+    var etag = "";
+    setInterval(function () {
+      fetch("/api/layout?device=default&token=" + encodeURIComponent(window.TLCD_TOKEN))
+        .then(function (r) { return r.json(); })
+        .then(function (doc) {
+          var stamp = JSON.stringify(doc);
+          if (etag && stamp !== etag) location.reload();
+          etag = stamp;
+        })
+        .catch(function () {});
+    }, 1000);
+  })();
+</script>
+</body>
+</html>

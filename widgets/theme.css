@@ -1,0 +1,58 @@
+/* thermallcd widget theme contract (D32).
+   Tokens come from the design doc's palette (source: synth.html).
+   Widgets consume ONLY these custom properties — never hardcode color or font.
+   Any animation keeps cycles <= 0.5 Hz so the ~6 FPS capture samples cleanly (D37). */
+
+:root {
+  --tlcd-surface: #0f0b1d;
+  --tlcd-surface-2: #161027;
+  --tlcd-field: #0a0716;
+  --tlcd-line: #282043;
+  --tlcd-text: #ece7f8;
+  --tlcd-dim: #8f87ae;
+  --tlcd-accent: #ff2e83;
+  --tlcd-warn: #ffd166;
+  --tlcd-font-display: "Audiowide", ui-monospace, monospace;
+  --tlcd-font-mono: "IBM Plex Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+  --tlcd-tick: 1s; /* platform-injected animation tick (D37); scenes read this */
+}
+
+html, body { background: transparent; } /* glass panels over the scene (D18) */
+body {
+  color: var(--tlcd-text);
+  font-family: var(--tlcd-font-mono);
+  margin: 0;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.tlcd-title {
+  font-family: var(--tlcd-font-display);
+  font-size: 14px;
+  letter-spacing: 3px;
+  color: var(--tlcd-dim);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--tlcd-line);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+.tlcd-big { font-size: 40px; font-weight: 700; line-height: 1.05; } /* tier 1 >= 40px (D18) */
+.tlcd-mid { font-size: 24px; }                                      /* tier 2 >= 24px */
+.tlcd-dim-text { color: var(--tlcd-dim); }
+.tlcd-accent-text { color: var(--tlcd-accent); }
+
+.tlcd-bar {
+  height: 10px; background: var(--tlcd-field);
+  border: 1px solid var(--tlcd-line); border-radius: 4px; overflow: hidden;
+}
+.tlcd-bar i { display: block; height: 100%; background: var(--tlcd-accent); }
+
+/* stale state (D23): dim the whole widget, badge it — never fake zeros */
+.tlcd-stale { opacity: 0.4; }
+.tlcd-stale::after {
+  content: "stale";
+  position: absolute; top: 6px; right: 10px;
+  font-size: 12px; color: var(--tlcd-warn);
+}

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">CPU-LOAD</div>
+  <div class="tlcd-big"><span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span></div>
+  <div class="tlcd-bar" style="margin: 8px 0"><i id="bar" style="width:0%"></i></div>
+  <div id="cores" class="tlcd-dim-text" style="font-size:14px; line-height:1.6"></div>
+<script>
+  window.tlcd.onMetrics(function (state, data) {
+    var body = document.body;
+    if (state === "stale") return;             // D23: dim + badge, keep last values
+    if (data.cpu == null) {                    // no measurement yet — never fake a zero
+      document.getElementById("pct").textContent = "—";
+      return;
+    }
+    document.getElementById("pct").textContent = Math.round(data.cpu);
+    document.getElementById("bar").style.width = data.cpu + "%";
+    var cores = data.cpu_cores || [];
+    var out = [];
+    for (var i = 0; i < cores.length; i++) {
+      out.push("c" + i + " " + (cores[i] == null ? "—" : Math.round(cores[i])));
+    }
+    document.getElementById("cores").textContent = out.join(" · ");
+  });
+</script>
+</body>
+</html>

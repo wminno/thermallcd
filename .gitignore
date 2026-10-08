@@ -18,5 +18,8 @@ tools/*.bin
 *.key
 *.pem
 *.token
+# runtime state: the auth token file is named `token` (no extension), plus
+# token.claimed and layouts/ — all machine-local, none of it belongs in git
+data/
 secrets/
 deploy/thermallcd.service
