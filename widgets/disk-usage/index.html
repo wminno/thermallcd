@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">DISK</div>
+  <div class="tlcd-mid">
+    <span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span>
+    <span id="free" class="tlcd-dim-text" style="font-size:13px"></span>
+  </div>
+  <div class="tlcd-bar" style="margin-top:6px"><i id="bar" style="width:0%"></i></div>
+<script>
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return;             // D23: dim + badge, keep last values
+    var disk = data.disk || {};
+    document.getElementById("pct").textContent =
+      disk.used_pct == null ? "—" : Math.round(disk.used_pct);
+    if (disk.used_pct != null) {
+      document.getElementById("bar").style.width = disk.used_pct + "%";
+    }
+    document.getElementById("free").textContent =
+      disk.free_gb == null ? "" : "  " + disk.free_gb + "G free";
+  });
+</script>
+</body>
+</html>

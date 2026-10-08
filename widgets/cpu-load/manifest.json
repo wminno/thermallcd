@@ -1,6 +1,7 @@
 {
   "name": "cpu-load",
   "title": "CPU-LOAD",
+  "description": "Overall and per-core CPU usage.",
   "size": { "w": 3, "h": 2 },
   "resize": "free",
   "min": { "w": 2, "h": 1 }

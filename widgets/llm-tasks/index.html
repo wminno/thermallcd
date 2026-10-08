@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">LLM-TASKS</div>
+  <div id="row" class="tlcd-dim-text" style="font-size:15px; line-height:1.5">
+    &mdash;
+  </div>
+<script>
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return;             // D23: dim + badge, keep last values
+    var tasks = data.llm_tasks;
+    if (tasks == null) return;                 // source not wired yet — never fake
+    var row = document.getElementById("row");
+    if (!tasks.length) {
+      row.textContent = "no active tasks";
+      return;
+    }
+    var out = [];
+    for (var i = 0; i < tasks.length && i < 3; i++) {
+      var t = tasks[i] || {};
+      out.push((t.name || t.id || "task") + (t.status ? " · " + t.status : ""));
+    }
+    var extra = tasks.length > 3 ? "  +" + (tasks.length - 3) : "";
+    row.textContent = out.join("  ·  ") + extra;
+  });
+</script>
+</body>
+</html>

@@ -5,6 +5,8 @@ Stdlib ThreadingHTTPServer (PF2) serving:
                      iframes (D21) on the D18 grid, stale contract in boot.js (D23)
   /api/login         token login -> cookie; first success flips the watermark (D20)
   /api/metrics       per-tick snapshot (PF1), token-gated
+  /api/nvtop         image-source widget (T4): nvtop TUI rendered from a pty
+                     as JPEG, sized to the widget's layout slot (D19/D33)
   /api/widgets       registry listing incl. malformed widgets' failure reasons (D25)
   /api/layout        per-device canonical layout (GET) + atomic writes (PUT);
                      ?shuffled=1 routes to the shuffle state (D28)
@@ -168,6 +170,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/api/metrics":
             return self._json(200, self.server.metrics.snapshot())
+        if route == "/api/nvtop":
+            # image-source widget (T4): the pane's TUI as JPEG; 404 when the
+            # layout has no nvtop slot — the widget dims, never fabricates
+            data = self.server.nvtop.jpeg()
+            if data is None:
+                return self._json(404, {"error": "nvtop not placed"})
+            return self._send(200, data, "image/jpeg")
         if route == "/api/widgets":
             return self._json(200, {"widgets": self.server.registry.scan()})
         if route == "/api/layout":
@@ -303,7 +312,21 @@ class DashboardServer(ThreadingHTTPServer):
         self.layout = layout
         self.metrics = metrics
         self.port = port
+        self._nvtop = None
         super().__init__(addr, Handler)
+
+    @property
+    def nvtop(self):
+        """Lazy nvtop image source — importing pyte/PIL (and forking nvtop)
+        must not happen for tests or startup, only on first widget request."""
+        if self._nvtop is None:
+            from thermallcd import nvtop_pane
+            self._nvtop = nvtop_pane.NvtopSource(self.layout)
+        return self._nvtop
+
+    def nvtop_stop(self):
+        if self._nvtop is not None:
+            self._nvtop.stop()
 
 
 def main(argv=None):
@@ -337,6 +360,7 @@ def main(argv=None):
         pass
     finally:
         metrics.stop()
+        server.nvtop_stop()
         server.server_close()
 
 

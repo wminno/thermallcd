@@ -1,0 +1,8 @@
+{
+  "name": "disk-usage",
+  "title": "DISK",
+  "description": "Root filesystem usage with free space.",
+  "size": { "w": 2, "h": 1 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 }
+}

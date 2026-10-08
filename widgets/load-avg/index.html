@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">LOAD-AVG</div>
+  <div class="tlcd-mid" style="line-height:1.4">
+    <span id="l1">&mdash;</span><span class="tlcd-dim-text" style="font-size:13px">1</span>
+    <span class="tlcd-dim-text">/</span>
+    <span id="l5">&mdash;</span><span class="tlcd-dim-text" style="font-size:13px">5</span>
+    <span class="tlcd-dim-text">/</span>
+    <span id="l15">&mdash;</span><span class="tlcd-dim-text" style="font-size:13px">15</span>
+  </div>
+<script>
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return;             // D23: dim + badge, keep last values
+    var load = data.load;                      // [1, 5, 15] or null pre-first-tick
+    ["l1", "l5", "l15"].forEach(function (id, i) {
+      var v = load && load[i];
+      document.getElementById(id).textContent = v == null ? "—" : v.toFixed(2);
+    });
+  });
+</script>
+</body>
+</html>

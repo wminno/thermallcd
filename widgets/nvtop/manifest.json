@@ -1,0 +1,9 @@
+{
+  "name": "nvtop",
+  "title": "NVTOP",
+  "description": "Live nvtop GPU monitor, rendered as pixels from a pty.",
+  "size": { "w": 4, "h": 2 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 },
+  "source": "image"
+}

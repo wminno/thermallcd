@@ -11,6 +11,7 @@ from pathlib import Path
 GRID_COLS = 12
 GRID_ROWS = 3
 RESIZE_MODES = ("free", "fixed")
+SOURCE_MODES = ("html", "image")
 
 
 def _validate_size(raw, what, errors):
@@ -47,6 +48,12 @@ def validate_manifest(directory: Path, manifest: dict) -> dict:
     if resize not in RESIZE_MODES:
         errors.append(f"resize mode {resize!r} unknown (expected one of {RESIZE_MODES})")
 
+    # SC4: the schema covers non-HTML sources — "image" widgets are served
+    # pixels by the platform (nvtop), "html" is the default iframe widget
+    source = manifest.get("source", "html")
+    if source not in SOURCE_MODES:
+        errors.append(f"source mode {source!r} unknown (expected one of {SOURCE_MODES})")
+
     min_size = None
     if "min" in manifest:
         min_size = _validate_size(manifest["min"], "manifest.min", errors)
@@ -54,9 +61,11 @@ def validate_manifest(directory: Path, manifest: dict) -> dict:
     entry = {
         "name": name if isinstance(name, str) else directory.name,
         "title": manifest.get("title", name),
+        "description": manifest.get("description", ""),
         "size": size,
         "resize": resize,
         "min": min_size,
+        "source": source,
     }
     if errors:
         entry["error"] = "; ".join(errors)

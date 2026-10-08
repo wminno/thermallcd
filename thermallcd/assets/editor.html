@@ -62,6 +62,7 @@
     border: 1px solid var(--tlcd-line); border-radius: 3px; padding: 1px 5px;
   }
   .palette-item.invalid { cursor: default; opacity: .85; }
+  .palette-item:disabled { opacity: .35; cursor: default; }
   .palette-item.invalid .reason {
     color: var(--tlcd-warn); font-size: 11px; margin-top: 6px; line-height: 1.4;
   }
@@ -154,6 +155,7 @@ var hist = [], ptr = -1, baselinePtr = -1, loading = false;
 var selected = null;
 var widgetsByName = {};
 
+var paletteBtns = {};   // widget name -> palette button (disabled once placed)
 var gridEl = document.getElementById("tlcd-canvas");
 var saveBtn = document.getElementById("save");
 var undoBtn = document.getElementById("undo");
@@ -190,6 +192,13 @@ function updateChrome() {
   undoBtn.disabled = ptr <= 0;
   redoBtn.disabled = ptr >= hist.length - 1;
   saveBtn.classList.toggle("dirty", ptr !== baselinePtr);
+  // one instance per widget type: ids are registry names, and the render
+  // path skips any layout id that is not one — a duplicate never renders
+  var placed = {};
+  nodes().forEach(function (n) { placed[n.id] = true; });
+  Object.keys(paletteBtns).forEach(function (name) {
+    paletteBtns[name].disabled = !!placed[name];
+  });
 }
 
 function markDirty() { updateChrome(); }
@@ -293,11 +302,15 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     widgetsByName[w.name] = w;
     var btn = document.createElement("button");
     btn.className = "palette-item";
+    btn.title = w.description || w.name;
+    paletteBtns[w.name] = btn;
     btn.innerHTML = "<span></span><span class='badge'></span>";
     btn.querySelector("span").textContent = (w.title || w.name);
     btn.querySelector(".badge").textContent = w.size.w + "x" + w.size.h;
     btn.addEventListener("click", function () {
-      grid.addWidget({ id: w.name, w: w.size.w, h: w.size.h });
+      var node = { id: w.name, w: w.size.w, h: w.size.h };
+      if (w.min) { node.minW = w.min.w; node.minH = w.min.h; }
+      grid.addWidget(node);
       renderChips();
     });
     aside.appendChild(btn);
@@ -309,7 +322,10 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   if (!doc) return;
   loading = true;
   grid.load(doc.widgets.map(function (it) {
-    return { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h };
+    var w = widgetsByName[it.id];
+    var node = { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h };
+    if (w && w.min) { node.minW = w.min.w; node.minH = w.min.h; }
+    return node;
   }));
   loading = false;
   renderChips();

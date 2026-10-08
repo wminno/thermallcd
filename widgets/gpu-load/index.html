@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">GPU-LOAD</div>
+  <div class="tlcd-big"><span id="busy">&mdash;</span><span class="tlcd-accent-text">%</span></div>
+  <div class="tlcd-bar" style="margin: 8px 0"><i id="bar" style="width:0%"></i></div>
+  <div class="tlcd-dim-text" style="font-size:14px; line-height:1.6">
+    VRAM <span id="vram">&mdash;</span> &middot; <span id="temp">&mdash;</span>&deg;C
+  </div>
+<script>
+  function gb(bytes) {
+    return bytes == null ? null : (bytes / 2147483648).toFixed(1) + "G";
+  }
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return;             // D23: dim + badge, keep last values
+    var gpu = data.gpu || {};
+    // every field null-safe: a missing source is "—", never a fabricated zero
+    document.getElementById("busy").textContent =
+      gpu.busy == null ? "—" : Math.round(gpu.busy);
+    if (gpu.busy != null) {
+      document.getElementById("bar").style.width = gpu.busy + "%";
+    }
+    var used = gb(gpu.vram_used), total = gb(gpu.vram_total);
+    document.getElementById("vram").textContent =
+      used == null ? "—" : total == null ? used : used + "/" + total;
+    document.getElementById("temp").textContent =
+      gpu.temp == null ? "—" : Math.round(gpu.temp);
+  });
+</script>
+</body>
+</html>

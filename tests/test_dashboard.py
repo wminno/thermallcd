@@ -55,6 +55,15 @@ class PlatformTestBase(unittest.TestCase):
         (widgets / "w-bad").mkdir()
         (widgets / "w-bad" / "manifest.json").write_text('{"name": "w-bad", "size": "oops"}')
         (widgets / "w-bad" / "index.html").write_text("<html><body>bad</body></html>")
+        (widgets / "w-image").mkdir()
+        (widgets / "w-image" / "manifest.json").write_text(json.dumps({
+            "name": "w-image", "title": "IMG", "size": {"w": 2, "h": 1},
+            "source": "image"}))
+        (widgets / "w-image" / "index.html").write_text("<html><body>img</body></html>")
+        (widgets / "w-srcbad").mkdir()
+        (widgets / "w-srcbad" / "manifest.json").write_text(json.dumps({
+            "name": "w-srcbad", "size": {"w": 1, "h": 1}, "source": "bogus"}))
+        (widgets / "w-srcbad" / "index.html").write_text("<html><body>src</body></html>")
         (widgets / "theme.css").write_text(":root { --tlcd-accent: #ff2e83; }")
 
         cls.token = dash.TokenStore(root / "data")
@@ -134,6 +143,15 @@ class TestAuthMatrix(PlatformTestBase):
         mode = oct(self.token.path.stat().st_mode & 0o777)
         self.assertEqual(mode, "0o600")
 
+    def test_nvtop_endpoint_auth_then_404_without_slot(self):
+        status, _, _ = _http(f"{self.base}/api/nvtop")
+        self.assertEqual(status, 401)
+        # a default layout without an nvtop slot: 404 and never a pane fork
+        self.store.save("default", {"widgets": [
+            {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]})
+        status, _, body = _http(f"{self.base}/api/nvtop", token=self.token.token)
+        self.assertEqual(status, 404)
+
 
 class TestRegistry(PlatformTestBase):
     def test_malformed_widget_skipped_with_reason(self):
@@ -143,6 +161,14 @@ class TestRegistry(PlatformTestBase):
         self.assertNotIn("error", by_name["w-good"])
         self.assertIn("error", by_name["w-bad"])          # D25: listed, not dropped
         self.assertIn("size", by_name["w-bad"]["error"])
+
+    def test_source_mode_validated(self):
+        # SC4: manifests declare their source; unknown modes fail with a reason
+        status, _, body = _http(f"{self.base}/api/widgets", token=self.token.token)
+        by_name = {w["name"]: w for w in body["widgets"]}
+        self.assertEqual(by_name["w-image"]["source"], "image")
+        self.assertEqual(by_name["w-good"]["source"], "html")     # default
+        self.assertIn("source", by_name["w-srcbad"]["error"])
 
     def test_dashboard_renders_only_valid_widgets(self):
         # a layout slot only becomes a frame when its widget is valid (D25/D22)

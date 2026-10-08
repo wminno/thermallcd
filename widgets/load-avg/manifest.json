@@ -1,0 +1,8 @@
+{
+  "name": "load-avg",
+  "title": "LOAD-AVG",
+  "description": "System load averages over 1, 5 and 15 minutes.",
+  "size": { "w": 2, "h": 1 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 }
+}

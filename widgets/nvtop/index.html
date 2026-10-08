@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">NVTOP</div>
+  <div id="msg" class="tlcd-dim-text" style="font-size:15px">&mdash;</div>
+  <img id="shot" alt="nvtop" style="display:none; width:100%; height:auto;
+       border-radius:4px;">
+<script>
+  // image-source widget (T4): the platform renders the nvtop pty to JPEG
+  // at this widget's slot size; resize: free re-renders the TUI (D19)
+  var img = document.getElementById("shot");
+  var msg = document.getElementById("msg");
+  var lastUrl = null;
+
+  function tooSmall() {
+    // below the 2x1 floor the terminal grid is unreadable — say so (D19)
+    return window.innerWidth < 300 || window.innerHeight < 110;
+  }
+
+  function refresh() {
+    if (tooSmall()) {
+      img.style.display = "none";
+      msg.style.display = "block";
+      msg.textContent = "too small — enlarge the widget";
+      return;
+    }
+    var TOKEN = window.TLCD_TOKEN || "";
+    fetch("/api/nvtop?token=" + encodeURIComponent(TOKEN))
+      .then(function (r) {
+        if (!r.ok) throw new Error("nvtop " + r.status);
+        return r.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        img.src = url;
+        img.style.display = "block";
+        msg.style.display = "none";
+        if (lastUrl) URL.revokeObjectURL(lastUrl);
+        lastUrl = url;
+      })
+      .catch(function () {
+        img.style.display = "none";
+        msg.style.display = "block";
+        msg.textContent = "nvtop unavailable";
+      });
+  }
+
+  window.tlcd.onMetrics(function (state) {
+    // metrics drive the stale contract (D23); the image polls on its own beat
+    if (state === "stale") return;
+    refresh();
+  });
+  setInterval(refresh, 2000);
+  window.tlcd.ready(refresh);
+</script>
+</body>
+</html>

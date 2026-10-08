@@ -1,0 +1,8 @@
+{
+  "name": "llm-tasks",
+  "title": "LLM-TASKS",
+  "description": "Active LLM jobs; empty state until a task source is wired.",
+  "size": { "w": 5, "h": 1 },
+  "resize": "free",
+  "min": { "w": 3, "h": 1 }
+}

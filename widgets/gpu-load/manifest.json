@@ -1,0 +1,8 @@
+{
+  "name": "gpu-load",
+  "title": "GPU-LOAD",
+  "description": "GPU busy %, VRAM usage and temperature (amdgpu best-effort).",
+  "size": { "w": 3, "h": 2 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 }
+}

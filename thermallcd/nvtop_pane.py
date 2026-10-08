@@ -7,6 +7,7 @@ monospace font. This lets any TUI appear as pixels on the LCD.
 """
 
 import fcntl
+import io
 import os
 import pty
 import select
@@ -220,3 +221,73 @@ class NvtopPane:
         cols = width // (bbox[2] - bbox[0])
         rows = height // px
         return cls(cols, rows, px=px, binary=binary)
+
+
+class NvtopSource:
+    """Server-side image source for the nvtop widget (T4/D19).
+
+    Owns one NvtopPane sized to the widget's layout slot; a slot-size change
+    recreates the pane, which re-renders nvtop at the new terminal size
+    (resize: free). A 60 s force_repaint loop bounds ncurses artifact
+    accumulation (R4). The pane is created lazily on first request and
+    dropped when the layout has no nvtop slot.
+    """
+
+    CELL_W, CELL_H, GAP = 150, 138, 8  # dashboard grid geometry (D33)
+
+    def __init__(self, layout, binary="/usr/bin/nvtop"):
+        self.layout = layout          # LayoutStore — re-read per request
+        self.binary = binary
+        self._pane = None
+        self._slot = None             # (w, h) the pane was built for
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._repaints = threading.Thread(target=self._repaint_loop, daemon=True)
+        self._repaints.start()
+
+    @classmethod
+    def pixels(cls, w, h):
+        """Slot size in device pixels (cells 150x138, 8px gutter, D33)."""
+        return (w * cls.CELL_W + (w - 1) * cls.GAP,
+                h * cls.CELL_H + (h - 1) * cls.GAP)
+
+    def _slot_size(self):
+        """(w, h) of the first nvtop slot in the canonical layout, or None."""
+        for item in self.layout.load("default")["widgets"]:
+            if item["id"] == "nvtop":
+                return item["w"], item["h"]
+        return None
+
+    def _repaint_loop(self):
+        while not self._stop.wait(60):
+            with self._lock:
+                if self._pane:
+                    self._pane.force_repaint()
+
+    def jpeg(self):
+        """JPEG of the pane at the current slot; None when no slot/binary."""
+        slot = self._slot_size()
+        if slot is None or not os.path.isfile(self.binary):
+            self._drop()
+            return None
+        wpx, hpx = self.pixels(*slot)
+        with self._lock:
+            if self._slot != slot or self._pane is None:
+                if self._pane:
+                    self._pane.stop()   # recreate: resize = new pty size (D19)
+                self._pane = NvtopPane.for_area(wpx, hpx, binary=self.binary)
+                self._slot = slot
+            img = self._pane.render(wpx, hpx)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+
+    def _drop(self):
+        with self._lock:
+            if self._pane:
+                self._pane.stop()
+            self._pane, self._slot = None, None
+
+    def stop(self):
+        self._stop.set()
+        self._drop()
