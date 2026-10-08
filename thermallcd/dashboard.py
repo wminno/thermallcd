@@ -156,6 +156,14 @@ class Handler(BaseHTTPRequestHandler):
             if self._authed():
                 return self._dashboard(query)
             return self._file(ASSETS / "login.html", "text/html; charset=utf-8")
+        if route == "/editor":
+            if self._authed():
+                return self._file(ASSETS / "editor.html", "text/html; charset=utf-8")
+            return self._file(ASSETS / "login.html", "text/html; charset=utf-8")
+        if route.startswith("/assets/"):
+            if not self._guarded():
+                return
+            return self._assets_static(route)
         if not self._guarded():
             return
         if route == "/api/metrics":
@@ -168,6 +176,10 @@ class Handler(BaseHTTPRequestHandler):
             state = self.server.layout.shuffle_state(device)
             if state:
                 doc = {**doc, "shuffled": state}
+            # the dashboard's 1 s layout poll (D27) reloads on any change to
+            # this doc — carrying the claim state here is what flips the
+            # on-panel watermark to a lock within a second of first login (D20)
+            doc = {**doc, "claimed": self.server.token.claimed()}
             return self._json(200, doc)
         return self._json(404, {"error": "not found"})
 
@@ -180,8 +192,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.token.verify(supplied):
             return self._json(401, {"error": "wrong token"})
         self.server.token.mark_claimed()  # first success -> watermark locks (D20)
-        cookie = (f"{TOKEN_COOKIE}={supplied}; HttpOnly; SameSite=Strict; Path=/; "
-                  "Max-Age=31536000")
+        # D24 "remember on this device": unchecked -> session cookie
+        cookie = f"{TOKEN_COOKIE}={supplied}; HttpOnly; SameSite=Strict; Path=/"
+        if body.get("remember", True):
+            cookie += "; Max-Age=31536000"
         return self._json(200, {"ok": True}, {"Set-Cookie": cookie})
 
     def do_PUT(self):
@@ -211,6 +225,17 @@ class Handler(BaseHTTPRequestHandler):
                   ".html": "text/html", ".json": "application/json",
                   ".png": "image/png", ".svg": "image/svg+xml"}
         return self._file(path, ctypes.get(path.suffix, "application/octet-stream"))
+
+    def _assets_static(self, route: str):
+        """Editor/vendor assets under assets/ — traversal-guarded."""
+        rel = route[len("/assets/"):]
+        target = (ASSETS / rel).resolve()
+        if ASSETS.resolve() not in target.parents or not target.is_file():
+            return self._json(404, {"error": "not found"})
+        ctypes = {".css": "text/css", ".js": "text/javascript",
+                  ".html": "text/html"}
+        return self._file(target, ctypes.get(target.suffix,
+                                             "application/octet-stream"))
 
     def _dashboard(self, query):
         registry = self.server.registry

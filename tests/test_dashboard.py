@@ -115,6 +115,21 @@ class TestAuthMatrix(PlatformTestBase):
         status, headers, _ = _http(f"{self.base}/widgets/theme.css")
         self.assertEqual(status, 200)
 
+    def test_editor_route(self):
+        status, _, body = _http(f"{self.base}/editor")
+        self.assertEqual((status, "SIGN IN" in body), (200, True))  # gate first
+        status, _, body = _http(f"{self.base}/editor", token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertIn("gridstack", body)  # editor page serves
+
+    def test_assets_guarded_with_traversal(self):
+        status, _, _ = _http(f"{self.base}/assets/vendor/gridstack.min.js")
+        self.assertEqual(status, 401)
+        # resolves to an existing file OUTSIDE assets/ — the guard must refuse
+        status, _, _ = _http(f"{self.base}/assets/../dashboard.py",
+                             token=self.token.token)
+        self.assertEqual(status, 404)
+
     def test_token_file_0600(self):
         mode = oct(self.token.path.stat().st_mode & 0o777)
         self.assertEqual(mode, "0o600")
@@ -187,6 +202,13 @@ class TestLayoutAPI(PlatformTestBase):
         status, _, body = _http(f"{self.base}/api/layout", method="PUT",
                                 token=self.token.token, body={"widgets": "nope"})
         self.assertEqual(status, 400)
+
+    def test_get_includes_claim_state(self):
+        # the dashboard's 1 s poll (D27) watches this doc: the claim state
+        # riding along is what flips the on-panel watermark (D20)
+        status, _, doc = _http(f"{self.base}/api/layout?device=c13",
+                               token=self.token.token)
+        self.assertEqual((status, doc["claimed"]), (200, False))
 
 
 if __name__ == "__main__":

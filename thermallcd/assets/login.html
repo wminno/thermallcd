@@ -41,6 +41,12 @@
   }
   button:hover { filter: brightness(1.1); }
   .error { color: var(--tlcd-warn); font-size: 13px; min-height: 18px; margin: 12px 0 0; }
+  .remember {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--tlcd-dim); font-size: 13px; margin: 14px 0 0;
+    cursor: pointer;
+  }
+  .remember input { width: 16px; height: 16px; accent-color: var(--tlcd-accent); }
 </style>
 </head>
 <body>
@@ -49,6 +55,8 @@
     <p>Enter the dashboard token — it prints on the panel until the first
        successful sign-in.</p>
     <input id="token" type="password" placeholder="token" autofocus>
+    <label class="remember"><input id="remember" type="checkbox" checked>
+      remember on this device</label>
     <button type="submit">SIGN IN</button>
     <div id="error" class="error"></div>
   </form>
@@ -59,7 +67,10 @@
     fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: document.getElementById("token").value }),
+      body: JSON.stringify({
+        token: document.getElementById("token").value,
+        remember: document.getElementById("remember").checked,
+      }),
     }).then(function (r) {
       if (r.ok) { location.reload(); return; }
       box.textContent = "wrong token — try again";
