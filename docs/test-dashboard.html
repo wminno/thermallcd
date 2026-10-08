@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>thermallcd capture-spike test page</title>
+<style>
+  html, body { margin: 0; width: 1920px; height: 462px; overflow: hidden; }
+  body {
+    background: #07060d;
+    background-image:
+      linear-gradient(rgba(255,46,131,.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,46,131,.14) 1px, transparent 1px);
+    background-size: 64px 64px;
+    color: #ece7f8;
+    font-family: monospace;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    align-items: center;
+    padding: 0 48px; box-sizing: border-box;
+  }
+  .big { font-size: 96px; font-weight: 700; }
+  .label { color: #8f87ae; font-size: 24px; letter-spacing: 4px; }
+  .accent { color: #ff2e83; }
+  .bar { height: 16px; background: #161027; border: 1px solid #282043; width: 100%; }
+  .bar i { display: block; height: 100%; background: #ff2e83; width: 70%; }
+</style>
+</head>
+<body>
+  <div><div class="label">CAPTURE SPIKE</div><div class="big" id="clock">--:--:--</div>
+    <div class="label">1920x462 · ~6 FPS</div></div>
+  <div><div class="label">CPU-LOAD</div><div class="big">87<span class="accent">%</span></div>
+    <div class="bar"><i style="width:87%"></i></div></div>
+  <div><div class="label">GPU-BUSY</div><div class="big">71<span class="accent">°C</span></div>
+    <div class="bar"><i style="width:64%"></i></div></div>
+<script>
+  // repaint every 250 ms — the screencast only produces frames on repaint
+  setInterval(() => {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('en-GB');
+  }, 250);
+</script>
+</body>
+</html>
