@@ -441,7 +441,7 @@ Test obligations (D9, D10): `python3 -m unittest discover` — auth matrix (401/
 
 - Windows port — deferred per doc:72; OS-specific bits stay behind one small abstraction.
 - CI/CD — deferred per doc:86; the unittest suite is CI-able when published.
-- License decision (GPL-3 vs MIT) — parked open question, settled at GitHub publish (doc:67).
+- License decision — SETTLED 2026-10-08 (D40): MIT (user choice; the GPL provenance note on the protocol docs was recorded and accepted). LICENSE file ships with the GitHub publish.
 - Auth-shape alternatives (random URL path, both) — parked open question (doc:68); token middleware ships now per D7.
 - External exposure path (port-forward vs VPN) — parked open question (doc:69).
 - npm/React toolchain — rejected at D2; no npm in the core repo.
