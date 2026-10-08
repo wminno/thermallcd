@@ -145,21 +145,29 @@ class Screencast:
         self.dropped = 0
         self.sent = 0
 
-    def run(self):
-        ws = websocket.create_connection(self.ws_url, timeout=5, enable_multithread=True)
-        ws.send(json.dumps({"id": 1, "method": "Page.enable"}))
+    def _start(self, ws, msg_id: int) -> int:
+        """(Re-)arm the screencast; chromium restarts the session each call."""
         ws.send(json.dumps({
-            "id": 2,
+            "id": msg_id,
             "method": "Page.startScreencast",
             "params": {"format": "jpeg", "quality": 85, "everyFrame": False},
         }))
+        return msg_id + 1
+
+    def run(self):
+        ws = websocket.create_connection(self.ws_url, timeout=5, enable_multithread=True)
+        ws.send(json.dumps({"id": 1, "method": "Page.enable"}))
+        self._msg_id = self._start(ws, self._msg_id)
         self._last_frame = time.time()
         try:
             while not self._stop.is_set():
                 try:
                     raw = ws.recv()
                 except websocket.WebSocketTimeoutException:
-                    self._stale_check()
+                    if self._stale_check():
+                        # session died (or never attached): re-arm instead of
+                        # warning forever — the panel stays black otherwise
+                        self._msg_id = self._start(ws, self._msg_id)
                     continue
                 if not raw:
                     break
@@ -190,14 +198,17 @@ class Screencast:
             except Exception:
                 pass
 
-    def _stale_check(self, force_reset: bool = False):
+    def _stale_check(self, force_reset: bool = False) -> bool:
+        """True exactly when the stale threshold fires (once per window)."""
         if force_reset:
             self._last_frame = time.time()
-            return
+            return False
         if time.time() - self._last_frame > self.stale_s:
-            print(f"capture: no frame for >{self.stale_s:.0f}s "
-                  "(static page? watchdog lands with T2)", file=sys.stderr)
+            print(f"capture: no frame for >{self.stale_s:.0f}s — re-arming "
+                  "screencast", file=sys.stderr)
             self._last_frame = time.time()
+            return True
+        return False
 
     def stop(self):
         self._stop.set()

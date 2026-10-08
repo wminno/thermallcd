@@ -76,15 +76,19 @@ class PlatformTestBase(unittest.TestCase):
 
 
 class TestAuthMatrix(PlatformTestBase):
-    def test_no_token_401(self):
-        status, _, _ = _http(f"{self.base}/")
-        self.assertEqual(status, 401)
+    def test_apis_401_without_token(self):
         status, _, _ = _http(f"{self.base}/api/metrics")
         self.assertEqual(status, 401)
 
-    def test_wrong_token_401(self):
-        status, _, _ = _http(f"{self.base}/api/metrics", token="nope")
-        self.assertEqual(status, 401)
+    def test_root_serves_login_page_when_unauthenticated(self):
+        # a human opening the printed URL gets a sign-in page, not JSON (D7/R2)
+        status, _, body = _http(f"{self.base}/")
+        self.assertEqual(status, 200)
+        self.assertIn("SIGN IN", body)
+        status, _, _ = _http(f"{self.base}/", token="nope")
+        self.assertEqual(status, 200)          # wrong token: same login page
+        status, _, body = _http(f"{self.base}/api/metrics", token="nope")
+        self.assertEqual(status, 401)          # APIs stay strict
 
     def test_right_token_200(self):
         status, _, body = _http(f"{self.base}/api/metrics", token=self.token.token)

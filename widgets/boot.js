@@ -3,7 +3,6 @@
    and enforces the stale contract (D23) platform-wide. */
 (function () {
   "use strict";
-  var TOKEN = window.TLCD_TOKEN || "";
   var callbacks = [];
   var timer = null;
   var lastTs = null;
@@ -22,6 +21,9 @@
   }
 
   function poll() {
+    // read the token per poll, not at parse time: the platform injects it
+    // into the iframe's head AFTER this script tag (D21 srcdoc ordering)
+    var TOKEN = window.TLCD_TOKEN || "";
     fetch("/api/metrics?token=" + encodeURIComponent(TOKEN))
       .then(function (r) { if (!r.ok) throw new Error("metrics " + r.status); return r.json(); })
       .then(function (snap) {

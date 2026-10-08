@@ -150,10 +150,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if route.startswith("/widgets/"):
             return self._widget_static(route)
+        if route == "/":
+            # a human opening the printed URL gets a sign-in page, not a
+            # JSON 401; the API routes below stay strict (D7/R2)
+            if self._authed():
+                return self._dashboard(query)
+            return self._file(ASSETS / "login.html", "text/html; charset=utf-8")
         if not self._guarded():
             return
-        if route == "/":
-            return self._dashboard(query)
         if route == "/api/metrics":
             return self._json(200, self.server.metrics.snapshot())
         if route == "/api/widgets":
@@ -244,10 +248,12 @@ def _widget_srcdoc(registry, name: str, token: str) -> str:
 def _render_dashboard(server, slots, srcdocs, token: str) -> str:
     url = lan_url(server.port)
     claimed = server.token.claimed()
-    short = server.token.token[:4] if not claimed else ""
+    # D20: the full token prints on the panel until the first successful
+    # login — physical presence on the device is the proof of ownership
+    shown = "" if claimed else server.token.token
     watermark = (
-        f"{url} · token {short} (until first login)"
-        if short else f"{url} &#128274;"
+        f"{url} · token {shown}"
+        if shown else f"{url} &#128274;"
     )
     frames = []
     for (item, entry), srcdoc in zip(slots, srcdocs):

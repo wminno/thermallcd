@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>thermallcd — sign in</title>
+<link rel="stylesheet" href="/widgets/theme.css">
+<style>
+  html, body { margin: 0; min-height: 100vh; }
+  body {
+    display: grid; place-items: center;
+    background:
+      radial-gradient(120% 160% at 18% 110%, #2a0f3f 0%, rgba(42,15,63,0) 55%),
+      linear-gradient(180deg, #07060d 0%, #0d0821 55%, #160b2e 78%, #1d0f38 100%);
+    font-family: var(--tlcd-font-mono, monospace);
+    color: var(--tlcd-text);
+  }
+  .card {
+    background: rgba(15, 11, 29, .82);
+    border: 1px solid var(--tlcd-line);
+    border-radius: 6px;
+    padding: 40px 48px;
+    width: min(360px, calc(100vw - 32px));
+  }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: .06em; }
+  p  { color: var(--tlcd-dim); font-size: 13px; margin: 0 0 24px; line-height: 1.5; }
+  input {
+    width: 100%; box-sizing: border-box;
+    background: var(--tlcd-field); color: var(--tlcd-text);
+    border: 1px solid var(--tlcd-line); border-radius: 4px;
+    font: inherit; font-size: 16px; padding: 12px 14px;
+    outline: none;
+  }
+  input:focus-visible { border-color: var(--tlcd-accent); }
+  button {
+    width: 100%; margin-top: 12px;
+    background: var(--tlcd-accent); color: #160b1e;
+    border: 0; border-radius: 4px;
+    font: inherit; font-weight: 700; letter-spacing: .08em;
+    padding: 12px 14px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  .error { color: var(--tlcd-warn); font-size: 13px; min-height: 18px; margin: 12px 0 0; }
+</style>
+</head>
+<body>
+  <form class="card" autocomplete="off">
+    <h1>THERMALLCD</h1>
+    <p>Enter the dashboard token — it prints on the panel until the first
+       successful sign-in.</p>
+    <input id="token" type="password" placeholder="token" autofocus>
+    <button type="submit">SIGN IN</button>
+    <div id="error" class="error"></div>
+  </form>
+<script>
+  document.querySelector("form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var box = document.getElementById("error");
+    fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: document.getElementById("token").value }),
+    }).then(function (r) {
+      if (r.ok) { location.reload(); return; }
+      box.textContent = "wrong token — try again";
+    }).catch(function () { box.textContent = "network error"; });
+  });
+</script>
+</body>
+</html>
