@@ -5,27 +5,45 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>thermallcd wireframe: panel strip + config editor</title>
 <style>
-  /* intentionally rough: system fonts, thin gray borders, no color */
+  /* intentionally rough: system fonts, thin gray borders, no color.
+     Matches docs/designs/dashboard-platform.md as of the 2026-10-08 design review:
+     first-six widgets, D18 default layout (hierarchy by size, nothing pinned),
+     D19 nvtop pty re-render, D20 settling watermark, D21 iframes, D23 stale contract. */
   body { font-family: system-ui, sans-serif; background: #f5f5f5; margin: 0; padding: 24px; }
   h1 { font-size: 18px; } h2 { font-size: 14px; margin: 28px 0 8px; }
   .note { font-size: 11px; color: #777; margin: 2px 0 10px; }
-  /* panel strip: 1920x462 scaled to 960x231 */
-  .panel { width: 960px; height: 231px; border: 1px solid #333; display: flex; background: #222; position: relative; }
-  .pane { width: 50%; border-right: 1px dashed #888; padding: 6px; color: #ddd; font-family: monospace; font-size: 9px; }
-  .widgets { width: 50%; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 4px; padding: 6px; }
-  .w { border: 1px solid #666; padding: 4px; font-size: 9px; color: #ccc; font-family: monospace; }
-  .w b { display: block; font-size: 9px; color: #eee; border-bottom: 1px dotted #555; margin-bottom: 4px; }
+  /* panel strip: 1920x462 scaled to 960x231; grid units, not pixels */
+  .panel { width: 960px; height: 231px; border: 1px solid #333; background: #222; position: relative;
+           display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 6px; }
+  .w { border: 1px solid #666; padding: 4px; font-size: 9px; color: #ccc; font-family: monospace; overflow: hidden; }
+  .w b { display: block; font-size: 9px; color: #eee; border-bottom: 1px dotted #555; margin-bottom: 4px; letter-spacing: 1px; }
+  .cpu  { grid-column: 1/4;  grid-row: 1/3; }
+  .gpu  { grid-column: 4/7;  grid-row: 1/3; }
+  .nv   { grid-column: 7/11; grid-row: 1/3; }
+  .disk { grid-column: 11/13; grid-row: 1/2; }
+  .load { grid-column: 11/13; grid-row: 2/3; }
+  .llm  { grid-column: 1/6;  grid-row: 3/4; }
+  .empty{ grid-column: 6/13; grid-row: 3/4; border: 1px dashed #555; color: #555; font-size: 9px;
+          display: flex; align-items: center; justify-content: center; }
+  .big { font-size: 20px; color: #fff; }   /* tier-1: largest type on the strip (≥40px at full size) */
+  .mid { font-size: 12px; color: #ddd; }   /* tier-2 values (≥24px at full size) */
   .bar { height: 5px; background: #444; margin: 2px 0; } .bar i { display: block; height: 5px; background: #999; }
   .url { position: absolute; right: 6px; bottom: 2px; font-size: 8px; color: #777; }
   /* config editor */
-  .editor { width: 960px; border: 1px solid #333; display: flex; background: #fafafa; }
-  .palette { width: 180px; border-right: 1px solid #999; padding: 8px; font-size: 11px; }
+  .editor { width: 960px; border: 1px solid #333; background: #fafafa; }
+  .topbar { display: flex; gap: 16px; padding: 6px 10px; border-bottom: 1px solid #999; font-size: 11px; align-items: center; }
+  .topbar .chip { margin-left: auto; border: 1px solid #999; padding: 2px 8px; background: #fff; }
+  .editbody { display: flex; }
+  .palette { width: 190px; border-right: 1px solid #999; padding: 8px; font-size: 11px; }
   .palette div { border: 1px solid #999; padding: 6px; margin-bottom: 6px; background: #fff; }
+  .palette .badge { float: right; color: #777; }
+  .palette .hint { border: none; color: #777; font-size: 10px; background: none; padding: 4px 0; }
   .canvas { flex: 1; padding: 10px; }
-  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; min-height: 180px; }
-  .cell { border: 1px dashed #aaa; min-height: 60px; font-size: 10px; padding: 4px; background: #fff; }
-  .cell.sel { border: 2px solid #333; }
-  .controls { border-top: 1px solid #999; padding: 8px; font-size: 11px; display: flex; gap: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(3, 1fr); gap: 6px; min-height: 150px; }
+  .cell { border: 1px dashed #aaa; min-height: 40px; font-size: 10px; padding: 4px; background: #fff; font-family: monospace; }
+  .cell.sel { border: 2px solid #c06; }  /* selection chrome; hot pink in the real theme */
+  .cell .size { color: #777; }
+  .controls { border-top: 1px solid #999; padding: 8px; font-size: 11px; display: flex; gap: 10px; flex-wrap: wrap; }
   .controls span { border: 1px solid #999; padding: 2px 8px; background: #fff; }
 </style>
 </head>
@@ -35,52 +53,60 @@
 
 <h1>thermallcd wireframe</h1>
 
-<h2>1. The panel (1920x462, shown at 50%)</h2>
-<div class="note">nvtop stays left half as an image widget; right half is the drag-drop grid. URL always bottom right.</div>
+<h2>1. The panel (per-device canvas — 1920x462 here, shown at 50%)</h2>
+<div class="note">Default layout per D18: hierarchy by widget SIZE, nothing pinned — tier 1 hero (cpu/gpu utilization+temp),
+tier 2 meters (nvtop, disk, load, llm), tier 3 ambient (scene + watermark). nvtop is a movable block; resizing
+sets its pty size and it re-renders (D19). Widgets render in per-widget iframes (D21); stale data dims with a
+"stale" mark, never silent zeros (D23). Boot: the scene renders first, widgets fade in on first data (D22).</div>
 <div class="panel">
-  <div class="pane">nvtop (image widget, pty capture)<br>GPU0 ~~~~~~~ 87%<br>~~~~~~~~~~~<br>~~~~~~~~~~~~</div>
-  <div class="widgets">
-    <div class="w"><b>CPU</b><div class="bar"><i style="width:70%"></i></div>c0 42% c1 31%<div class="bar"><i style="width:40%"></i></div>c2 55% c3 28%</div>
-    <div class="w"><b>MEM</b>38.2/64G<div class="bar"><i style="width:59%"></i></div>swap 2.1/8G</div>
-    <div class="w"><b>GPU</b>busy 87%<div class="bar"><i style="width:87%"></i></div>VRAM 14/24G<div class="bar"><i style="width:58%"></i></div>temp 71C</div>
-    <div class="w"><b>NET</b>^ 42 MB/s<div class="bar"><i style="width:30%"></i></div>v 118 MB/s<div class="bar"><i style="width:80%"></i></div></div>
-    <div class="w"><b>CLOCK</b><br>14:42<br>Tue 07 Oct<br>up 3d 4h</div>
-    <div class="w"><b>LLM</b>qwen2-72b<br>41 tok/s<br>ctx 12k/32k<div class="bar"><i style="width:37%"></i></div></div>
-  </div>
-  <div class="url">http://192.168.x.x:8080 · token abcd</div>
+  <div class="w cpu"><b>CPU-LOAD</b><span class="big">87%</span><div class="bar"><i style="width:70%"></i></div><span class="mid">c0 42 · c1 31 · c2 55 · c3 28</span></div>
+  <div class="w gpu"><b>GPU-LOAD</b><span class="big">71°C</span><div class="bar"><i style="width:87%"></i></div><span class="mid">busy 87% · VRAM 14/24G</span></div>
+  <div class="w nv"><b>NVTOP (default 4x2 — movable)</b>GPU0 ~~~~~~~~~~~ 87%<br>~~~~~~~~~~~<br>~~~~~~~~~~~~<br>(pty bitmap, re-renders on resize)</div>
+  <div class="w disk"><b>DISK</b><span class="mid">▓▓▓░ 64%</span></div>
+  <div class="w load"><b>LOAD-AVG</b><span class="mid">0.8 · 0.6 · 0.4</span></div>
+  <div class="w llm"><b>LLM-TASKS</b><span class="mid">qwen2-72b · 41 tok/s · ctx 12k/32k</span><div class="bar"><i style="width:37%"></i></div></div>
+  <div class="empty">empty by design — the scene shows through</div>
+  <div class="url">http://192.168.x.x:8080 · token abcd (until first login → 🔒 · hideable in editor)</div>
 </div>
 
 <h2>2. Config editor (browser, token-protected, same widgets)</h2>
-<div class="note">Left: discovered widgets from widgets/ dir. Center: the live grid, drag to move, corner-drag to resize. Bottom: flair + burn-in shuffle.</div>
+<div class="note">Top: brand, canvas size, connection chip — becomes a device selector when N&gt;1 panels are connected.
+Left: discovered widgets from widgets/ (size badges). Center: the live dashboard (WYSIWYG), drag to move,
+corner-drag to resize. Bottom: flair, scanlines, panel opacity, shuffle, URL toggle, save.</div>
 <div class="editor">
-  <div class="palette">
-    <b style="font-size:10px">WIDGETS</b>
-    <div>cpu-load &nbsp;[+]</div>
-    <div>gpu-load &nbsp;[+]</div>
-    <div>disk-usage [+]</div>
-    <div>load-avg &nbsp;[+]</div>
-    <div>llm-tasks [+]</div>
-    <div>nvtop &nbsp;&nbsp;&nbsp;[+]</div>
-    <div>network &nbsp;[+]</div>
-  </div>
-  <div class="canvas">
-    <div class="grid">
-      <div class="cell sel">nvtop<br>3x2</div>
-      <div class="cell">cpu-load<br>1x1</div>
-      <div class="cell">gpu-load<br>1x1</div>
-      <div class="cell">mem<br>1x1</div>
-      <div class="cell">net<br>1x1</div>
-      <div class="cell">clock<br>1x1</div>
-      <div class="cell">llm-tasks<br>2x1</div>
-      <div class="cell">disk<br>1x1</div>
+  <div class="topbar"><b>thermallcd</b> <span style="color:#777">1920x462</span> <span class="chip">1 panel · token ok</span></div>
+  <div class="editbody">
+    <div class="palette">
+      <b style="font-size:10px">WIDGETS</b>
+      <div>cpu-load <span class="badge">3x2</span></div>
+      <div>gpu-load <span class="badge">3x2</span></div>
+      <div>nvtop <span class="badge">4x2</span></div>
+      <div>disk-usage <span class="badge">2x1</span></div>
+      <div>load-avg <span class="badge">2x1</span></div>
+      <div>llm-tasks <span class="badge">5x1</span></div>
+      <div class="hint">drop a .html file into widgets/ to add more</div>
     </div>
-    <div class="controls">
-      <span>flair: synthwave ▾</span><span>scanlines: on</span><span>shuffle: 15 min ▾</span><span>save</span>
+    <div class="canvas">
+      <div class="grid">
+        <div class="cell cpu sel">cpu-load <span class="size">3x2</span></div>
+        <div class="cell gpu">gpu-load <span class="size">3x2</span></div>
+        <div class="cell nv">nvtop <span class="size">4x2</span></div>
+        <div class="cell disk">disk-usage <span class="size">2x1</span></div>
+        <div class="cell load">load-avg <span class="size">2x1</span></div>
+        <div class="cell llm">llm-tasks <span class="size">5x1</span></div>
+        <div class="cell empty">empty — scene shows through</div>
+      </div>
+      <div class="controls">
+        <span>flair: [thumb][thumb][thumb] ▾</span><span>scanlines: on</span><span>panel opacity —— 70%</span><span>shuffle: 15 min ▾</span><span>URL on panel: on</span><span>save</span>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- decision: sizes are grid units (cols x rows), not pixels; the editor maps units to the
-     960x462 right half. Burn-in shuffle permutes widget positions on the timer, layout JSON saved server-side. -->
+<!-- decision: sizes are grid units (cols x rows), not pixels; layout JSON is per device
+     (layouts/<serial>.json). Burn-in shuffle permutes positions on the timer, layout saved
+     server-side. Token gate (D24): centered card, inline 401 error, remember-on-this-device.
+     Micro-states (D25): save toast, dirty dot, palette notice for new drop-ins, malformed
+     widgets listed with their failure reason. -->
 </body>
 </html>

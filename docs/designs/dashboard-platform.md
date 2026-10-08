@@ -12,14 +12,15 @@ The Thermalright Trofeo Vision 9.16" panel (USB `0416:5408`, 1920x462) is vendor
 
 ## What Makes This Cool
 
-- The dashboard **is a web page** rendered at exactly 1920x462; the panel shows the browser's own frames. Config editor and panel share one renderer, so what you arrange is exactly what the panel shows.
+- The dashboard **is a web page** rendered at the panel's native profile (1920x462 for this SKU); the panel shows the browser's own frames. Config editor and panel share one renderer, so what you arrange is exactly what the panel shows.
 - Widgets are **single-file HTML/CSS/JS drop-ins** with a tiny manifest, auto-discovered from a `widgets/` directory. Anyone who can write a web component can contribute a widget.
 - Flair is first-class: the Synthwave Scene Deck (`~/projects/retro-synth/synth.html` — canvas scenes, spectrum analyzers, CRT/VHS overlays, film grain) runs as a living background layer. The browser owns the frame clock.
 - The protocol archaeology (LY wire, handshake, 512-byte chunking) becomes the public reference for this display class.
 
 ## Constraints
 
-- Canvas 1920x462; firmware ignores JPEG frames over ~450 KB; vendor streaming rate ~6 FPS.
+- Canvas: per-device profile resolved at the USB handshake — 1920x462 for this SKU; the vendor family is multi-mode (1920x462 / 1920x440 / 1280x480 / 320x320, keyed on the handshake PM byte per `reference/trcc-linux/ly_lcd.py`). Firmware ignores JPEG frames over ~450 KB; vendor streaming rate ~6 FPS.
+- Multiple panels of this class are supported: one capture pipeline per connected device; the editor selects which panel it edits.
 - Host: amdgpu box, no nvidia-smi. Data sources: /proc, /sys/class/drm, hwmon.
 - nvtop stays via the existing pty/pyte pipeline, injected as an image widget.
 - Config UI is exposed on the external IP, therefore token-protected.
@@ -28,11 +29,11 @@ The Thermalright Trofeo Vision 9.16" panel (USB `0416:5408`, 1920x462) is vendor
 ## Premises (agreed 2026-10-07)
 
 1. Thesis: thermallcd is the fully open Linux alternative for this panel class; README + panel photo + protocol docs + one-command install are part of the product; git + publishing in scope.
-2. Browser-rendered: dashboard is a web page at 1920x462; panel shows a headless capture; config editor edits the same page (WYSIWYG).
+2. Browser-rendered: the dashboard is a web page rendered at the connected panel's profile (1920x462 for this SKU); panel shows a headless capture; config editor edits the same page (WYSIWYG).
 3. Widgets = drop-in files (HTML/CSS/JS + manifest) in `widgets/`, auto-discovered, listed in the web UI; the six requested widgets ship first.
 4. Python shrinks to transport: web server + headless capture feeding the existing lcd.py JPEG pipeline; headless browser cost (~200-300 MB RAM) accepted.
 5. nvtop is the one exception: pty/pyte bitmap injected as an image widget.
-6. Config UI token-protected; its URL printed small in the panel's bottom-right corner.
+6. Config UI token-protected; its URL printed small in the panel's bottom-right corner (hideable via an editor toggle, D20).
 7. Burn-in shuffle = cheap insurance toggle (periodic widget reshuffle); IPS burn-in rare, image persistence real.
 
 Landscape note: WebSearch returned no results this session; the three-layer synthesis (Grafana/HA/conky; Trmnl-style screenshot-served displays; the vendor-compositor assumption) is from in-distribution knowledge.
@@ -53,21 +54,88 @@ Same lean stack as A, but Python calls `Page.startScreencast` once; Chromium pus
 **C.** Rationale: the flair engine is canvas animation, so the thing that draws should own the frame clock; A's screenshot mode stays as fallback.
 
 - `thermallcd/web` — Python stdlib (http.server/aiohttp): dashboard page, config editor, widget registry (scans `widgets/`), layout persistence (JSON), token auth.
-- `thermallcd/capture` — launches resident `chromium --headless=new --remote-debugging-port`, opens the dashboard at 1920x462, starts screencast, forwards frames (throttle, PIL re-encode, <450 KB baseline JPEG) to lcd.py.
-- `widgets/<name>/` — `manifest` (name, title, size in grid units, refresh) + html/css/js. First six: nvtop (image source), cpu-load, gpu-load, disk-usage, load-avg, llm-tasks. Next batch: memory+swap, network, temps+fan, top-processes, clock, disk-IO, services-health.
-- Config editor — vanilla JS + vendored GridStack: drag-drop, corner-resize in grid units, palette of discovered widgets, flair picker, burn-in shuffle interval, save.
-- Flair — synth.html scenes as background layer; CRT scanline/VHS overlay as global layer; spectrum analyzers optionally driven by system load ("the scene pulses with your server").
-- Burn-in shuffle — permutes widget positions every X minutes; layout JSON persists.
-- Security — token auth (random, printed on the panel), bind 0.0.0.0; token stored 0600, gitignored.
+- `thermallcd/capture` — enumerates connected panels (USB 0416:5408), resolves each device's profile (width×height) at handshake, and launches one resident `chromium --headless=new --remote-debugging-port` per device at that device's canvas; screencast frames are throttled, PIL re-encoded (<450 KB baseline JPEG) and forwarded to that device via lcd.py. The dashboard page renders the flair scene immediately at startup; widgets fade in on their first successful metrics tick — the panel never shows a black frame (D22); the D8 status card covers outages.
+- `widgets/<name>/` — `manifest` (name, title, size in grid units, refresh, resize mode: `free` | `fixed`) + html/css/js. First six: nvtop (image source), cpu-load, gpu-load, disk-usage, load-avg, llm-tasks. Next batch: memory+swap, network, temps+fan, top-processes, clock, disk-IO, services-health. nvtop ships `resize: free` — resizing sets the pty size and nvtop re-renders its TUI at the new cell count (D19), with a minimum size and a designed "too small" state below it. Widgets render in per-widget iframes (srcdoc, theme injected as custom properties) so one broken widget cannot take the shared page down (D21); a failed slot shows a compact "widget-name failed — see server log" card in the platform's own style, never a blank hole. The `refresh` field is seconds against the per-tick /api/metrics snapshot (PF1); boilerplate owns failure rendering (D23) — stale data dims to ~40% with a "stale" mark, genuinely empty shows a designed idle state, missing data never renders as zero. The widget-author contract (docs/widgets.md at publish time, D30) collects all of it: manifest fields, theme tokens, refresh + stale behavior, resize modes, error-boundary semantics, one worked example.
+- Config editor — vanilla JS + vendored GridStack: drag-drop, corner-resize in grid units, palette of discovered widgets, flair picker (thumbnail strip with live mini-previews, D29), panel-opacity slider, burn-in shuffle interval, show-URL-on-panel toggle, save. Token gate (D24): centered card on the synthwave backdrop, single token field with a visible label, hint ("the code is on your panel, bottom-right" — true on first run), inline error on 401, "remember on this device" checkbox. Micro-states (D25): toast "Saved — panel updates in ~2 s"; dirty dot on the save button for unsaved changes; the palette picks up new drop-ins on the next registry scan with a subtle notice; a malformed widget appears in the palette with its failure reason ("manifest parse error at line 3") instead of being silently skipped. Canvas (D27): a scaled live iframe of the actual dashboard page (~0.5x) with GridStack drag/resize handles overlaid; a saved layout change is visible on the panel within one shuffle-free second (SSE or poll). Interaction set (D31): click-to-select with visible chrome (label + delete button on the selected card), corner-resize with a live size readout ("2x1"), drag via 200 ms press-and-hold on touch, trash zone; full undo/redo history client-side over GridStack change events. Breakpoints (D34): ≥1024 px shows the full mocked layout; below that the palette collapses to a toggleable drawer, the settings row stacks vertically, and the canvas scales full-width (the D27 iframe scales natively). Accessibility baseline (D35): every interactive control is keyboard-reachable with a themed visible focus ring (the D32 focus tokens, not the browser default); Delete/Backspace removes the selected widget (keyboard users can select and delete; drag-move/resize remains pointer-only at milestone one); touch targets ≥44 px on both breakpoints; text contrast ≥4.5:1 against its composed surface — the glass panel over the scene included — verified in the D33 visual pass and the 1 m smoke test.
+- Flair — synth.html scenes as background layer; CRT scanline/VHS overlay as global layer (intentionally uncapped — strength is tuned by eye in the D33 visual pass, D36 2026-10-08); spectrum analyzers optionally driven by system load ("the scene pulses with your server"). Default: the synthwave scene is ON from first boot (D29) — first boots and README photos show the product, not gray cards. Motion budget (D37): the platform exposes a captureFps-aware clock as a CSS custom property / JS tick (`--tlcd-tick`); flair animations are authored against it and nothing cycles faster than ~0.5 Hz (spectrum bars slew smoothly rather than pulse) — 6 FPS sampling of ≤0.5 Hz motion is artifact-free by Nyquist; verified on-panel in the D33 visual pass. The editor's flair picker is a thumbnail strip with live mini-previews of each scene (D29).
+- Burn-in shuffle — permutes widget positions every X minutes (D28): within equal-size groups only, with a short crossfade (2–3 frames at 6 FPS); the editor always shows the canonical layout with a "last shuffled at HH:MM" note; shuffle writes carry a `shuffled` field through the layout store, never overwriting the canonical arrangement.
+- Security — token auth (random; printed on the panel only until the first successful editor login, then a lock glyph — recoverable from the 0600 token file or `thermallcd token`, D20); bind 0.0.0.0; token stored 0600, gitignored. The watermark layer carries a dark scrim, a minimum-contrast rule against the flair scene, and a dimmed settled state; an editor toggle hides the URL entirely.
+
+### Device profiles & multi-panel (agreed 2026-10-08)
+
+- The panel announces itself: the handshake's PM/SUB bytes resolve width×height via the vendor FBL table (1920x462, 1920x440, 1280x480, 320x320, …). The dashboard grid renders against the detected profile; layout JSON is stored in grid units, so one arrangement reflows across resolutions within the family.
+- Device identity: USB serial (iSerial), falling back to bus/port path when absent. Layouts are per device (`layouts/<serial>.json`); a layout is never auto-applied to a panel of a different profile.
+- One capture pipeline per device: N panels = N headless Chromium instances, N screencast loops, N lcd writers, each supervised independently by the D8 watchdog.
+- Editor: the top-bar connection chip becomes a device selector when N > 1; the WYSIWYG canvas re-scales to the selected panel's profile. With one panel connected, nothing changes.
 
 Wireframe (rough, opens in any browser): `docs/wireframe-dashboard.html` — panel strip + config editor layout.
+
+### Information hierarchy (agreed 2026-10-08, D18)
+
+The strip is read from across the desk in about a second. Hierarchy comes from widget **size**, never a position lock — any widget can take the hero slot by being sized big. The default layout demonstrates the intended glance order:
+
+1. **First read — utilization + temperature.** CPU and GPU load/temperature at the largest type on the strip; the numbers are the hero.
+2. **Second read — supporting meters.** Disk usage, load average, VRAM, LLM tasks — same token system, smaller values.
+3. **Third read — ambient.** The synthwave scene behind the glass, the clock, the URL watermark.
+
+```
+PANEL (per-device canvas — 1920x462 here)          z-order bottom → top:
+┌────────────────────────────────────────────┐     1 scene (synthwave canvas)
+│ TIER 1  cpu-load 87% ▁▃▅▇   gpu 71°C 11.2GB│     2 glass widget panels (adjustable opacity)
+│ TIER 2  disk ▓▓▓░ 64%   load 0.8   llm 2   │     3 scanline overlay (global layer)
+│ TIER 2  nvtop — default 3x2, movable       │     4 URL watermark (own scrim)
+│ TIER 3  clock 14:42        http://…:8080   │
+└────────────────────────────────────────────┘
+```
+
+Minimum text sizes on the panel canvas (defaults, tunable at the visual pass): tier-1 values ≥ 40 px, tier-2 values ≥ 24 px, labels ≥ 14 px — readability at ~1 m is part of the manual smoke checklist. Where `docs/wireframe-dashboard.html` conflicts with this section (it pins nvtop left; it depicts MEM/NET/CLOCK, which are not first-six widgets), this section wins.
+
+### Interaction states (agreed 2026-10-08, D21–D26)
+
+What the user SEES per state — decisions D21–D26 consolidated:
+
+| Surface | Loading | Empty / idle | Error | Success | Partial / stale |
+|---|---|---|---|---|---|
+| Panel boot | flair scene renders immediately (D22) | — | — | widgets fade in on first data tick | — |
+| Widget slot | boilerplate placeholder until first tick | designed idle state ("no tasks") | "widget-name failed — see server log" card (D21) | live values | dim ~40% + "stale" mark; never zero for missing data (D23) |
+| nvtop slot | pty attach | — | subprocess dead → error card; "too small" state below min size (D19) | TUI bitmap | force_repaint bounds artifacts ≤ 60 s (R4) |
+| Editor entry | token gate card (D24) | — | inline error on 401 | "token ok" chip | — |
+| Editor save | — | — | failure toast with reason | toast "Saved — panel updates in ~2 s" | dirty dot until saved (D25) |
+| Palette | registry scan | hint "drop a .html file into widgets/" | malformed widget listed with its failure reason (D25) | widget cards with size badges | new drop-ins appear on next scan |
+| Capture outage | chromium relaunch | — | D8 status card | live frames | stale-frame timeout → status card |
+| Panel unplug | — | — | status card + reconnect | auto-recovers (R4) | — |
+
+### Journey storyboard (agreed 2026-10-08, Pass 3)
+
+| STEP | USER DOES | USER FEELS | PLAN SPECIFIES? |
+|---|---|---|---|
+| 1 | Plugs the panel in | anticipation | scene-first boot (D22); flair on from first boot (D29); never a black frame |
+| 2 | Reads the desk from ~1 m | pride | D18 hierarchy: utilization + temp is the first read |
+| 3 | Spots the URL, bottom-right | curiosity | scrim'd watermark (D20); token visible until first auth |
+| 4 | Opens the editor, types the token | friction, then relief | token gate (D24): hint, inline 401 error, remember-me |
+| 5 | Drags widgets on the live canvas | play | WYSIWYG live iframe (D27); nvtop resizes via pty re-render (D19) |
+| 6 | Hits save, glances at the panel | payoff | save toast (D25); panel obeys within 1 s (D27) |
+| 7 | Opens the flair picker, browses scenes | delight | thumbnail strip with live previews (D29); panel-opacity slider |
+| 8 | Drops in a friend's widget file | discovery | palette notice; malformed widgets list their failure reason (D25) |
+| 9 | Ships their own widget | contribution | widget-author contract, docs/widgets.md (D30) |
+| 10 | Walks away; the shuffle runs | trust | equal-size permutation + crossfade; canonical layout never overwritten (D28) |
+
+Time horizons: 5-second visceral = the glance (D18 hierarchy over a living scene); 5-minute behavioral = the edit→save→panel loop (D27's one-second bound); 5-year reflective = the contribution thesis (D30) and the protocol reference for the display class.
+
+### Design tokens & widget theme contract (agreed 2026-10-08, D32)
+
+Token source: `~/projects/retro-synth/synth.html` — ground `#07060d`, surfaces `#0f0b1d` / `#161027`, field `#0a0716`, hairline `#282043`, text `#ece7f8`, dim `#8f87ae`, accent `#ff2e83`; Audiowide (display) + IBM Plex Mono (data). These are the platform's design tokens until a DESIGN.md exists.
+
+Platform-provided `widgets/theme.css` defines custom properties — `--tlcd-surface`, `--tlcd-line`, `--tlcd-text`, `--tlcd-dim`, `--tlcd-accent`, `--tlcd-warn`, `--tlcd-font-display`, `--tlcd-font-mono` — plus `--tlcd-tick`, the captureFps-aware animation clock (D37), injected into each widget iframe (D21). Widgets consume tokens and never hardcode color or font; any widget animation keeps cycles ≤0.5 Hz so the ~6 FPS capture samples it cleanly. Browser surfaces (selection, scrollbars, focus rings, caret) are themed from the same tokens on both the dashboard page and the editor.
+
+Grid: 12 columns × 3 rows baseline on the 1920x462 canvas — per-device profiles rescale the cell size (grid units already do); 8 px gutters, 12 px card padding, 6 px corner radius (D33).
 
 ## Open Questions
 
 - License: GPL-3.0 (matches the ecosystem it references) vs MIT (max adoption).
 - Auth shape: token vs random URL path vs both.
 - External exposure: port-forward vs VPN (e.g. Tailscale) for "available on the external IP".
-- Exact widget manifest schema — settle while building widget #1.
+- Exact widget manifest schema — settle while building widget #1; already decided: the manifest carries a resize mode (`free` | `fixed`, D19) and nvtop re-renders via pty resize.
 - Chromium packaging on the target distro (apt chromium vs playwright-bundled).
 - Windows port: deferred; keep OS-specific bits behind one small abstraction.
 
@@ -107,3 +175,407 @@ First end-to-end frame: a resident Chromium screencasting a 1920x462 dashboard p
 - Your spec was concrete about feelings, not just features: "I want some flair added, customizable backgrounds", and you reached for your own synth project as the background engine. You design for the glance.
 - You pre-empted two failure modes most people discover the hard way: burn-in ("a toggle that lets you swap widgets around after X period") and lockout ("display the url to the management interface in small text... so we always know how to address it").
 - You interrupted the flow to protect hygiene: "make sure to keep sensitive files with usernames and such out of the commits" — before anyone published anything.
+
+---
+
+# Engineering review (/plan-eng-review, 2026-10-07)
+
+Review target (fixed): **this document** — "Design: thermallcd dashboard platform" (Status: APPROVED, commit 0c6feb5). Reviewer: Claude /plan-eng-review, session 1037673-1791377651-0f01ad67. Search unavailable (WebSearch empty all session) — proceeding with in-distribution knowledge only. No TODOS.md existed; nothing to cross-reference.
+
+## Scope record (Step 0)
+
+- Complexity gate: tripped (~11+ proposed new files, 2 new services: web, capture).
+- Feature answers: none — no cuts proposed; approved feature list retained.
+- Structure: **B — Smaller arrangement** (D5): flat `thermallcd/dashboard.py` (HTTP server + widget registry + layout JSON + token auth), `thermallcd/capture.py` (chromium launch + CDP screencast + throttle/encode), `widgets/<name>.html` single-file widgets with embedded manifest, editor page + vendored gridstack.js. Packages + widget folders declined.
+- Accepted scope: the dashboard platform as approved, arranged flat per D5; feature list unchanged (capture spike → web server + registry → editor → six widgets → flair → auth → shuffle → publish).
+- Pending remedies: SC1, SC3 (below).
+
+## Scope Challenge findings (C.1)
+
+- **SC1 [P2] (confidence: 9/10)** docs/designs/dashboard-platform.md:55-56 — "Python stdlib (http.server/aiohttp)" for `web` conflicts with the capture design: CDP `Page.startScreencast` runs over a WebSocket and Python's stdlib has no WebSocket client (through 3.14). The capture module needs one: add a small dep (e.g. `websocket-client`, pure Python), hand-roll a minimal RFC 6455 client, or use aiohttp for both server and WS client.
+- **SC2 [P2] (confidence: 9/10)** docs/designs/dashboard-platform.md:86 — no test strategy in the plan; the only mention is "a frame-render smoke test in CI" post-publish. Capture frame limits (<450 KB, ~6 FPS), registry auto-discovery, layout persistence and token auth are untested-by-plan. Deferred to Test review (Section 3) for a concrete test plan.
+- **SC3 [P1] (confidence: 8/10)** docs/designs/dashboard-platform.md:96-97 vs :55,61 — the server exists from build step 3 and binds 0.0.0.0 (external IP per premise 6), but token auth is step 7: a write-capable config UI sits unauthenticated on the network through steps 3-6 of development. Order security with the server, not after flair.
+- **SC4 [P3] (confidence: 8/10)** docs/designs/dashboard-platform.md:57 — manifest schema must cover non-HTML widget sources: nvtop is an image source (server-composed bitmap), not an HTML drop-in. Note recorded; folds into the existing "manifest schema — settle while building widget #1" open question. No remedy proposed.
+- **SC5 [P3] (confidence: 8/10)** docs/designs/dashboard-platform.md:57 — llm-tasks has no defined data source (process scan? known LLM-server APIs?). Deferred to widget build (step 5); flagged so it isn't discovered mid-widget. No remedy proposed now.
+
+## Decision ledger
+
+### R1 (SC1): WebSocket client mechanism for the CDP screencast connection
+Finding: SC1 [P2] (confidence: 9/10) docs/designs/dashboard-platform.md:55-56 — reviewer Claude.
+Plan baseline: "Python stdlib (http.server/aiohttp)" (doc:55); browser-owns-frame-clock architecture approved at D2.
+Runtime evidence: unknown — no capture code exists yet (build step 2 pending); stdlib-has-no-WS-client verified against Python 3.14 stdlib inventory.
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: websocket-client dep | B: hand-rolled RFC 6455 | C: aiohttp for server+WS |
+|---|---|---|---|---|
+| SC1 WS client for CDP | unspecified; stdlib-only implied | `websocket-client` pip dep | ~150-line client inside capture.py | aiohttp WS client |
+| Web server mechanism | stdlib http.server/aiohttp | stdlib http.server (unchanged) | stdlib http.server (unchanged) | aiohttp server (rewritten) |
+| New pip deps | none stated | +1 (pure Python, small) | none | +1 (heavier, async) |
+| Approved feature list / D2 architecture | approved | unchanged | unchanged | unchanged |
+
+Question D6 — SC1: where does the CDP WebSocket client come from?
+Project/branch/task: main — capture.py must receive `Page.startScreencast` frames over WebSocket; the plan says "Python stdlib (http.server/aiohttp)" (docs/designs/dashboard-platform.md:55).
+ELI10: Chromium pushes dashboard frames over a WebSocket. Python's standard library has no WebSocket client, so the plan's "stdlib only" line cannot literally hold for capture. Something gives: a tiny existing library, our own minimal implementation, or a bigger framework that does both jobs.
+Stakes if we pick wrong: a hand-rolled protocol client is a maintenance worm inside the "transport only" ethos; a needless framework rewrites the server plan; wrong either way means bugs in frame delivery — the core pipeline.
+Recommendation: A because websocket-client is one small pure-Python dep, battle-tested, and keeps the server on stdlib exactly as planned.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) Add websocket-client dep (recommended)
+  ✅ Battle-tested RFC 6455 client, one pure-Python wheel; PEP 668 install is already this repo's documented pattern (pip --user --break-system-packages). (human: ~15 min / CC: ~5 min)
+  ✅ Server stays stdlib http.server as planned; capture.py stays thin — connect, subscribe, forward frames.
+  ❌ One third-party dep in a repo whose ethos is "no toolchain" — the pip requirement must be documented in install.sh/README so strangers still clone-to-running in minutes.
+B) Hand-roll minimal RFC 6455 client
+  ✅ Zero deps — the whole pipeline stays stdlib; nothing extra for a stranger to install beyond Chromium. (human: ~2-4 h / CC: ~30 min)
+  ✅ The client needs only text/binary frames and close handling; Chromium's endpoint is fixed, so no general-purpose negotiation is required.
+  ❌ Owning protocol edge cases (ping/pong, fragmentation, masking) inside the load-bearing frame path is exactly the worm the "transport only" premise exists to avoid.
+C) aiohttp for both server and WS
+  ✅ One dependency covers the CDP WebSocket and the web server; async event flow fits frame-push naturally. (human: ~1 day / CC: ~20 min)
+  ❌ Heavier framework dep rewrites the server plan around async; more surface than "Python shrinks to transport" wants at this stage.
+
+State: approved
+Actual answer: A) Add websocket-client dep (D6)
+Accepted scope: capture.py uses the `websocket-client` pip package as its CDP WebSocket client; the web server stays stdlib http.server; the pip requirement is documented in install.sh/README.
+History: original proposal stdlib-only (doc:55); reopened by SC1 because the capture design requires a WS client the stdlib lacks.
+
+### R2 (SC3): auth ordering vs external bind
+Finding: SC3 [P1] (confidence: 8/10) docs/designs/dashboard-platform.md:96-97 vs :55,61 — reviewer Claude.
+Plan baseline: server + registry exist from build step 3 with bind 0.0.0.0 (premise 6); token auth scheduled at step 7 (doc:97).
+Runtime evidence: unknown — no server code exists yet; exposure window is a property of the planned order, quoted from the doc.
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: auth with server | B: loopback until auth | C: keep order |
+|---|---|---|---|---|
+| SC3 auth ordering | token auth at step 7 (doc:97) | token middleware built at step 3 | bind 127.0.0.1 through steps 3-6; token + 0.0.0.0 at step 7 | unchanged |
+| Unauthenticated exposure window | steps 3-6, external IP | none | loopback only (local machine) | steps 3-6, external IP |
+| Build order change | — | step 7 shrinks to URL-on-panel + external IP check | step 7 unchanged in content | none |
+| Approved premise 6 (token-protected, external IP, URL on panel) | approved | unchanged | unchanged | unchanged |
+
+Question D7 — SC3: when does token auth land relative to the externally-bound server?
+Project/branch/task: main — dashboard.py serves the config editor on 0.0.0.0 per premise 6, but the build order puts token auth three steps after the server (docs/designs/dashboard-platform.md:96-97).
+ELI10: The plan builds the web server first and adds the lock three steps later. Every step in between, the write-capable config UI is reachable on the network without a password. The fix is ordering: build the lock when the door is installed, or keep the door shut (loopback) until the lock exists.
+Stakes if we pick wrong: an unauthenticated config UI on the external IP is the one scenario where a stranger can rewrite what the panel shows — or probe the host through it; the user pre-empted exactly this with premise 6.
+Recommendation: A because token auth is roughly 30 lines of middleware and the panel exists to sit on a network; building it late guarantees a window where the UI is open.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) Build token auth with the server (recommended)
+  ✅ The exposure window closes to zero: nothing externally reachable exists before it checks the token. (human: ~1 h / CC: ~10 min)
+  ✅ Step 7 shrinks to URL-on-panel + external IP check; the security premise is testable from the first server commit.
+  ❌ Security code lands before any dashboard exists to protect, so early testing exercises auth against placeholder pages.
+B) Bind loopback until auth exists
+  ✅ Dev traffic stays on the machine; the external bind and token land together at step 7 as originally written. (human: ~30 min / CC: ~10 min)
+  ✅ No reordering of approved steps — only a temporary bind constant.
+  ❌ The window is closed by discipline (remembering to flip the bind), and step-7 work is doubled: auth + bind change + first-ever external test.
+C) Keep the order
+  ✅ No plan change; development is fastest until step 7. (human: 0 / CC: 0)
+  ❌ A write-capable config UI sits unauthenticated on the network through steps 3-6 — on the box whose whole point is external availability.
+
+State: approved
+Actual answer: A) Build token auth with the server (D7)
+Accepted scope: token middleware built in dashboard.py at build step 3; build step 7 shrinks to URL-on-panel + external IP check. Nothing externally reachable exists before it checks the token.
+History: original order approved at D3 (doc:96-97); reopened by SC3 for the unauthenticated exposure window between server (step 3) and auth (step 7).
+
+### R3 (A2): chromium crash behavior in the capture path
+Finding: A2 [P2] (confidence: 8/10) docs/designs/dashboard-platform.md:56 — reviewer Claude (Section 1).
+Plan baseline: capture launches resident Chromium and forwards frames (doc:56); no supervision, restart, or stale-frame behavior stated.
+Runtime evidence: unknown — no capture code yet (build step 2 pending). Failure is a property of the unsupervised design; "fresh boot to live dashboard with no manual steps" (doc:78) is the approved success criterion it risks.
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: capture supervises chromium | B: defer supervision |
+|---|---|---|---|
+| Chromium crash/hang behavior | unspecified; last frame or black, silent | detect (exit + stale-frame timeout), relaunch, status card | silent until manual restart |
+| "No manual steps" success criterion (doc:78) | at risk | holds | at risk |
+| New capture.py scope | launcher + stream only | + watchdog loop | none |
+| Approved feature list | unchanged | unchanged (robustness of approved capture path) | unchanged |
+
+Question D8 — A2: what happens when the resident Chromium dies?
+Project/branch/task: main — the panel's frames come from one resident Chromium process driven by capture.py (docs/designs/dashboard-platform.md:56).
+ELI10: The whole dashboard depends on one browser process. If it crashes or wedges, the panel freezes on its last frame and nobody is notified. The choice is whether capture.py babysits that process (restart it, show a "reconnecting" card) or whether a dead browser means a dead panel until a human restarts the service.
+Stakes if we pick wrong: a silently frozen panel reads as "the project is broken" — the exact impression an open-source alternative cannot afford on a stranger's desk.
+Recommendation: A because a watchdog loop is a small, bounded addition to capture.py and the no-manual-steps success criterion is the product's front door.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) Capture.py supervises chromium (recommended)
+  ✅ Crash or stale-frame timeout triggers relaunch; the panel shows a status card instead of freezing silently. (human: ~2 h / CC: ~15 min)
+  ✅ Protects the approved "fresh boot to live dashboard with no manual steps" criterion (doc:78) across reboots, OOM kills, and chromium updates.
+  ❌ A watchdog loop is the most bug-prone part of capture.py — a bad supervisor can crash-loop more visibly than the original crash.
+B) Defer supervision
+  ✅ Capture spike and early build stay minimal; supervision can be added when the platform stabilizes. (human: 0 / CC: 0)
+  ❌ Every chromium crash freezes the panel until someone notices and restarts the service — the failure the success criteria promise won't happen.
+
+State: approved
+Actual answer: A) Capture.py supervises chromium (D8)
+Accepted scope: capture.py gains a watchdog loop — detect chromium exit or stale-frame timeout, relaunch, and render a status card on the panel during outages.
+History: new finding from Section 1 (architecture) — no prior approval covered crash behavior.
+
+### R4 (CQ1): migration inventory — behaviors at risk when monitor.py retires
+Finding: CQ1 [P2] (confidence: 8/10) README.md:34-35, README.md:88-92 vs docs/designs/dashboard-platform.md:56 — reviewer Claude (Section 2).
+Plan baseline: capture.py becomes the sole panel writer (A1 disposition, from premises 4-5); monitor.py's behaviors not itemized in the doc.
+Runtime evidence: existing working code — monitor.py reconnects when the panel is unplugged/replugged (README.md:34) and runs NvtopPane.force_repaint() every REPAINT_INTERVAL=60 s (README.md:88-92, the shipped mitigation for stale graph fragments).
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: carry behaviors forward | B: drop them |
+|---|---|---|---|
+| Reconnect on unplug/replug | working in monitor.py | reimplemented in capture.py | lost |
+| force_repaint every 60 s | working (bounds nvtop artifacts <60 s) | carried into nvtop image source | artifacts return unbounded |
+| ~6 FPS + <450 KB frame contract | working | enforced in capture.py encoder | firmware risk |
+| Approved feature list | unchanged | unchanged (behavior preservation) | — |
+
+Necessary implementation of the approved architecture (A1 disposition, premise 5): behaviors carried forward; their regression coverage is settled in Test review (R6). No separate approval needed for the preservation itself.
+
+## Section 2 — Code quality findings
+
+- **CQ1 [P2] (confidence: 8/10)** README.md:34-35, :88-92 — migration inventory: reconnect-on-replug and the 60 s force_repaint mitigation live in monitor.py; the monitor.py → capture.py/nvtop-source migration must carry both, plus the ~6 FPS/<450 KB frame contract. Disposition: accepted (carried forward as necessary implementation; regression coverage decided at R6).
+- **CQ2 [P3] (confidence: 7/10)** docs/designs/dashboard-platform.md:57 — single-file widgets need a manifest embedding convention (HTML meta/comment) that the registry can parse without a second file; folds into the parked manifest open question (doc:70). No remedy proposed.
+- Shared-code rubric: lcd.py reuse is already the plan (doc:56) and is the only first-party reusable block; after monitor.py retires, capture.py is its sole caller — no extraction warranted. No standalone history/PR sweep.
+
+### R5 (SC2/Test): test framework selection
+Finding: SC2 [P2] (confidence: 9/10) docs/designs/dashboard-platform.md:86 + Section 3 framework detection (no config, TESTFILES:1 = test_card.py, not a test) — reviewer Claude.
+Plan baseline: no test strategy in the doc; the only mention is a post-publish CI smoke test (doc:86).
+Runtime evidence: no test infrastructure exists in the repo; Python 3.14 stdlib includes unittest; PEP 668 makes extra pip deps a documented `--break-system-packages` step.
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: stdlib unittest | B: pytest | C: none/manual only |
+|---|---|---|---|---|
+| SC2 test strategy | absent | unittest discover, zero deps | pytest runner | manual checklist only |
+| New pip deps | 0 | 0 | +1 | 0 |
+| Coverage of Section 3 unit gaps | none | all 6 unit gaps testable | all 6 unit gaps testable | none |
+| Repo ethos (no toolchain) | approved | matches | +1 documented dep | matches |
+
+Question D9 — Test framework: what runs the planned tests?
+Project/branch/task: main — the plan needs tests for auth, registry, layout, encoder, throttle; the repo has none today.
+ELI10: The plan now has six unit-testable gaps and no test runner at all. Python ships with unittest built in; pytest is nicer to write but is one more thing to install; no runner means the checklist is all manual.
+Stakes if we pick wrong: a heavyweight runner in a no-toolchain repo adds install friction for every contributor; no runner leaves the security and persistence code verified only by eyeball.
+Recommendation: A because unittest is stdlib, zero-dep, and the six gaps are small pure-Python units — the repo's ethos decides it.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) stdlib unittest (recommended)
+  ✅ Zero deps: `python3 -m unittest discover` works on any Python 3.14 box after clone; nothing new for install.sh to install. (human: ~2 h total / CC: ~20 min)
+  ✅ The six gaps (auth 401s, registry skip, layout round-trip + recovery, size cap, throttle cap) are plain function-level asserts — unittest covers them without plugins.
+  ❌ Verbose asserts and no parametrize; if the suite grows big, pytest later means rewriting assertions.
+B) pytest
+  ✅ Parametrize and fixtures make the throttle/burst and token-matrix cases terser to write and read. (human: ~1.5 h / CC: ~15 min)
+  ✅ Same discovery story (`pytest` after one pip install).
+  ❌ Adds a pip dependency to a repo whose install promise is minimal; PEP 668 makes it a `--break-system-packages` line contributors must trust.
+C) No automated tests
+  ✅ Nothing to maintain; manual checklist only. (human: 0 / CC: 0)
+  ❌ Auth, registry, and layout recovery regressions ship silently; SC2's finding stands unaddressed.
+
+State: approved
+Actual answer: A) stdlib unittest (D9)
+Accepted scope: tests run with `python3 -m unittest discover`, zero added dependencies; the six unit gaps (auth 401 matrix, registry skip, layout round-trip + recovery, encoder size cap, throttle cap) are unittest cases.
+History: new from Test review (SC2 deferred here per Scope Challenge disposition).
+
+### R6 (CQ1/Test): regression contract for monitor.py behaviors at migration risk
+Finding: CQ1 [P2] (confidence: 8/10) README.md:34-35, :88-92 — IRON RULE question: the planned migration puts working behavior at risk with zero existing coverage — reviewer Claude.
+Plan baseline: reconnect-on-replug, force_repaint every 60 s, and the ~6 FPS/<450 KB frame contract all work in monitor.py today; capture.py replaces it (A1 disposition).
+Runtime evidence: existing working code (README.md:34, :88-92); no automated tests exist (Section 3 detection).
+
+Comparison grid:
+
+| Choice | Current (plan baseline) | A: pre-USB asserts + smoke checklist | B: manual smoke only | C: unit asserts only |
+|---|---|---|---|---|
+| Frame contract (<450 KB, ~6 FPS) | enforced in monitor.py encoder | unit-tested (encoder + throttle) | eyeballed | unit-tested |
+| Reconnect on unplug/replug | working | manual smoke at milestones | manual smoke at milestones | untested |
+| force_repaint 60 s (nvtop artifacts bounded) | working | manual smoke (watch graph 1+ min) | manual smoke | untested |
+| Regression rule satisfied | no coverage = critical gap | yes | yes (weaker, physical-only) | partial — physical behaviors untested |
+
+Question D10 — Regression contract: how do we prove the migration didn't lose monitor.py's behaviors?
+Project/branch/task: main — capture.py replaces monitor.py as panel writer, carrying reconnect, force_repaint, and the frame contract (README.md:34, :88-92).
+ELI10: Three behaviors work today: the panel recovers when unplugged, nvtop's graph self-cleans every minute, and frames stay small and slow enough for the firmware. The rewrite could silently break any of them. The frame parts are assertable in code; the physical parts need someone watching the panel.
+Stakes if we pick wrong: an oversized frame or broken reconnect shows up as a dead or frozen panel for users whose hardware we never see — the worst kind of bug report for a published driver.
+Recommendation: A because the frame contract is exactly what unittest is for and the two physical behaviors need eyes on the panel; both halves are cheap.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) Pre-USB asserts + manual smoke checklist (recommended)
+  ✅ Encoder size-cap and throttle-cap unit tests catch frame-contract regressions in CI-able form; the checklist covers what code can't see. (human: ~1 h / CC: ~15 min)
+  ✅ Documents the smoke steps in the repo, so strangers porting to their own setups inherit the verification procedure.
+  ❌ The physical half stays manual forever — it depends on someone running the checklist at milestones.
+B) Manual panel smoke checklist only
+  ✅ No test code to maintain; the checklist exercises the true end-to-end path including USB. (human: ~30 min / CC: ~5 min)
+  ❌ Frame-size and rate regressions rely on eyeball; an encoder edge that only trips on some content slips through.
+C) Unit asserts only
+  ✅ Fully automated; runs everywhere without hardware. (human: ~30 min / CC: ~10 min)
+  ❌ Reconnect and force_repaint — the two behaviors the migration most plausibly breaks — have no coverage at all.
+
+State: approved
+Actual answer: A) Pre-USB asserts + manual smoke checklist (D10)
+Accepted scope: encoder size-cap and throttle-cap unittest cases assert the frame contract; a documented manual panel smoke checklist (reconnect on replug, force_repaint bounding nvtop artifacts, visual FPS) runs at build milestones.
+History: new from Test review; IRON RULE (regression rule) requires a dedicated decision since no coverage exists.
+
+## Section 4 — Performance findings
+
+- **PF1 [P3] (confidence: 7/10)** docs/designs/dashboard-platform.md:57 — metrics re-read per request: six widgets polling `/api/metrics` at ~1 Hz would re-read `/proc` + `/sys` per request; a per-tick snapshot keeps it to one read set per tick (~6 req/s) and makes all widgets consistent within a tick. Scale: ~6 requests/s, a handful of /proc//sys reads each. Disposition: accepted as build guidance (snapshot cache noted for dashboard.py).
+- **PF2 [P3] (confidence: 7/10)** docs/designs/dashboard-platform.md:55-56 — blocking without timeouts: the server must be ThreadingHTTPServer (editor + metrics concurrency), the WebSocket recv needs a timeout (doubles as D8's stale-frame detector), and lcd.py bulk writes are not a bottleneck (~44 FPS measured capacity vs ~6 FPS demand). Scale: 6 FPS, <450 KB JPEG frames, chromium ~200-300 MB RAM (accepted premise 4). Disposition: accepted as build guidance.
+- Memory: one 1920x462 RGB PIL frame ≈ 2.6 MB, decoded screencast JPEG churn bounded at 6 FPS — no finding. No database, no N+1 surface.
+
+## Outside Voice
+
+CODEX_MODE: not_installed — Codex CLI absent; outside coverage unavailable. Install: `npm install -g @openai/codex`. Native fallback unavailable in this session (TaskOutput tool absent). Recorded: codex-plan-review, status unavailable, source none, outside_status unavailable.
+
+## Approval readiness
+
+Approval readiness: PASS — R1 (D6: websocket-client), R2 (D7: auth with server), R3 (D8: chromium supervision), R4 (carried from premises 4-5), R5 (D9: unittest), R6 (D10: pre-USB asserts + smoke checklist); scope record (D5) saved and verified. All accepted remedies cite their actual answers; no pending decisions remain.
+
+## Working plan (as amended by this review)
+
+The approved design stands, arranged flat per D5, with these binding amendments:
+
+1. ~~git init, username scrub~~ (done 2026-10-07).
+2. **Capture spike**: `thermallcd/capture.py` — device enumeration + per-device profile resolution (handshake → width×height), resident `chromium --headless=new --remote-debugging-port` (one per connected device), CDP `Page.startScreencast` over **websocket-client** (D6), throttle ~6 FPS, PIL re-encode <450 KB → lcd.py; scene-first boot (D22) — the page renders flair immediately, widgets fade in on first data, never a black frame. Includes the **watchdog** (D8: exit + stale-frame detection, relaunch, status card) and carries monitor.py's behaviors (R4: reconnect + IN-endpoint drain, frame contract). monitor.py retires as service entry; `deploy/thermallcd.service.template` ExecStart updated.
+3. **dashboard.py**: stdlib ThreadingHTTPServer (PF2) with **token auth middleware built first** (D7), widget registry scanning single-file `widgets/<name>.html` with embedded manifest (D5, CQ2), per-device layout store (`layouts/<serial>.json`, canonical + `shuffled` view per D28), `/api/metrics` with per-tick snapshot (PF1).
+4. **Visual pass** (D33): one high-fidelity HTML mock of the panel — real scene, first-six widgets, watermark, layer order — verified on the panel at ~1 m, fixing type scale, gutters and layer order for real; then the GridStack config editor (vendored gridstack.js) — live-iframe WYSIWYG canvas (D27), 1 s save→panel bound, token gate + micro-states (D24/D25), interaction set with undo/redo (D31); a11y checklist walked here (D35): keyboard reach + focus rings, 44 px targets, 4.5:1 contrast over glass.
+5. Port the six widgets; nvtop as image widget (carries force_repaint 60 s per R4); dashboard page renders widgets in per-widget iframes (srcdoc) with a per-widget error card (D21), the platform stale contract (D23), and the widgets/theme.css token contract (D32).
+6. Flair layer (synth.html scenes, load-reactive spectrum) — synthwave scene on by default from first boot (D29).
+7. URL-on-panel + external IP check (auth already shipped in step 3 per D7).
+8. Burn-in shuffle — equal-size permutation + crossfade, canonical/`shuffled` layout split (D28).
+9. GitHub publish (README photo, protocol docs, license decision, widget-author contract `docs/widgets.md` per D30).
+
+Test obligations (D9, D10): `python3 -m unittest discover` — auth matrix (401/401/200), registry skip + failure-reason payload (D25), layout round-trip + corrupt-recovery, encoder size cap, throttle cap — plus the documented manual panel smoke checklist (replug reconnect, force_repaint bounding, visual FPS) run at build milestones.
+
+## NOT in scope
+
+- Windows port — deferred per doc:72; OS-specific bits stay behind one small abstraction.
+- CI/CD — deferred per doc:86; the unittest suite is CI-able when published.
+- License decision (GPL-3 vs MIT) — parked open question, settled at GitHub publish (doc:67).
+- Auth-shape alternatives (random URL path, both) — parked open question (doc:68); token middleware ships now per D7.
+- External exposure path (port-forward vs VPN) — parked open question (doc:69).
+- npm/React toolchain — rejected at D2; no npm in the core repo.
+
+## What already exists
+
+- `thermallcd/lcd.py` — the USB driver; capture.py reuses it as the sole panel writer (doc:56). Reuse, not rebuild.
+- `thermallcd/nvtop_pane.py` — pty/pyte renderer; becomes the nvtop widget's image source (premise 5).
+- `deploy/install.sh` + udev rule — install path extends for websocket-client + chromium package check.
+- GridStack (vendored) and Chromium + CDP (external binary) — third-party capabilities, not authored code.
+- pyte/PIL/pyusb — existing user-site deps (README:41).
+
+## Failure modes
+
+| Path | Failure | Coverage | Silent? |
+|---|---|---|---|
+| Resident chromium | crash / OOM / hang | D8 watchdog relaunch + status card; manual smoke | no (card shown) |
+| CDP WebSocket | drop mid-session | same watchdog reconnect (D8) | no |
+| Frame too large | firmware drops it | encoder size-cap unittest (D10) | would be silent — test covers |
+| Panel unplug/replug | stale IN poisons handshake | reconnect + drain (R4); manual smoke | no (recovers) |
+| layout.json corrupt | parse error | default-layout fallback; unittest recovery (EC1) | would be silent — test covers |
+| Widget broken at runtime | exception / bad CSS on the shared page | per-widget iframe isolation + "widget-name failed" error card (D21) | no (card shown) |
+
+Critical gaps: **0** — every diagrammed failure mode has test coverage or error handling with a non-silent surface.
+
+## Worktree parallelization strategy
+
+Two disjoint module lanes — parallelizable via worktrees:
+
+| Step | Modules touched | Depends on |
+|------|----------------|------------|
+| Capture spike (plan step 2) | capture.py, lcd.py (read-only reuse), service template | — |
+| Dashboard server (plan steps 3-4) | dashboard.py, editor assets, vendored gridstack | — |
+| Widgets + flair (plan steps 5-6) | widgets/, nvtop_pane.py | both lanes |
+| Install/docs (plan step 7 + T7) | install.sh, README | all |
+
+Lane A: capture spike → watchdog. Lane B: token auth → registry/layout/metrics → unittest suite. Launch A + B in parallel (disjoint files). Merge both, then widgets (needs both capture and metrics API), then docs/install last. Conflict flags: README.md is touched by both lanes — sequence docs into the final step.
+
+## Implementation Tasks
+Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship.
+
+- [ ] **T1 (P1, human: ~1 h / CC: ~10 min)** — dashboard.py — build token auth with the server, before anything binds externally
+  - Surfaced by: Scope Challenge — SC3/D7 auth ordering
+  - Files: thermallcd/dashboard.py, deploy/install.sh (token file 0600, gitignored)
+  - Verify: unittest 401/401/200 matrix
+- [ ] **T2 (P1, human: ~2 h / CC: ~15 min)** — capture.py — chromium watchdog: exit + stale-frame detection, relaunch, status card
+  - Surfaced by: Section 1 — A2/D8
+  - Files: thermallcd/capture.py
+  - Verify: manual smoke (kill chromium → status card → relaunch → dashboard live)
+- [ ] **T3 (P2, human: ~2-4 h / CC: ~30 min)** — capture.py — CDP screencast over websocket-client, throttle ~6 FPS, PIL re-encode <450 KB
+  - Surfaced by: Scope Challenge — SC1/D6
+  - Files: thermallcd/capture.py, README.md
+  - Verify: unittest size-cap + throttle-cap; spike frame on the panel
+- [ ] **T4 (P2, human: ~1 h / CC: ~10 min)** — migration — carry monitor.py behaviors (reconnect + drain, force_repaint 60 s); retire monitor.py as service entry
+  - Surfaced by: Section 1 — A1; Section 2 — CQ1/R4
+  - Files: thermallcd/capture.py, thermallcd/nvtop_pane.py, deploy/thermallcd.service.template, README.md
+  - Verify: manual smoke checklist (replug reconnect, 60 s artifact watch)
+- [ ] **T5 (P2, human: ~2 h / CC: ~20 min)** — dashboard.py — registry + layout store + metrics API (per-tick snapshot, ThreadingHTTPServer, recv timeouts)
+  - Surfaced by: Section 1 — A7; Section 4 — PF1/PF2
+  - Files: thermallcd/dashboard.py
+  - Verify: unittest registry skip + layout round-trip/recovery + metrics partial-JSON
+- [ ] **T6 (P2, human: ~2 h / CC: ~20 min)** — tests — unittest suite (D9) + documented smoke checklist (D10)
+  - Surfaced by: Test review — SC2/D9/D10
+  - Files: tests/ (new), README.md
+  - Verify: `python3 -m unittest discover`
+- [ ] **T7 (P2, human: ~30 min / CC: ~5 min)** — install/docs — websocket-client dep + chromium package check in install.sh
+  - Surfaced by: D6 con; D10 checklist placement
+  - Files: deploy/install.sh, README.md
+  - Verify: fresh-clone install run
+- [ ] **T8 (P1, human: ~2 h / CC: ~15 min)** — dashboard page shell — scene-first boot (D22): flair renders immediately, widgets fade in on first data, never a black frame; z-order stack scene → glass panels → scanlines → watermark (D18)
+  - Surfaced by: Design review D18/D22
+  - Files: thermallcd/dashboard assets, widgets/theme.css
+  - Verify: boot with zero metrics → scene visible, no black frame
+- [ ] **T9 (P1, human: ~1 h / CC: ~10 min)** — widgets/theme.css token contract (D32) + `--tlcd-tick` captureFps-aware clock (D37); browser surfaces themed
+  - Surfaced by: Design review D32/D37
+  - Files: widgets/theme.css
+  - Verify: all six widgets consume tokens, no hardcoded color/font
+- [ ] **T10 (P1, human: ~2 h / CC: ~20 min)** — per-widget iframes (srcdoc) with failure-reason error cards (D21) + platform stale contract (D23)
+  - Surfaced by: Design review D21/D23
+  - Files: dashboard assets, registry failure payload
+  - Verify: broken widget shows card + server log reason; stale dims with mark, never zeros
+- [ ] **T11 (P2, human: ~4 h / CC: ~40 min)** — editor core — GridStack over live-iframe canvas (D27), palette with size badges + failure reasons (D25), token gate + remember-me (D24), save toast/dirty dot, 1 s save→panel bound
+  - Surfaced by: Design review D24/D25/D27
+  - Files: editor assets, dashboard.py (SSE/poll)
+  - Verify: save → panel updates ≤1 s; 401 shows inline error
+- [ ] **T12 (P2, human: ~3 h / CC: ~30 min)** — editor interaction — full undo/redo (D31), a11y baseline (D35: keyboard reach + focus rings, Delete removes selection, 44 px targets, 4.5:1 over glass), two breakpoints (D34)
+  - Surfaced by: Design review D31/D34/D35
+  - Files: editor assets
+  - Verify: keyboard select/delete works; contrast pass in visual pass
+- [ ] **T13 (P2, human: ~3 h / CC: ~30 min)** — flair — synthwave on from first boot (D29), thumbnail picker + opacity slider, scanline overlay (uncapped, tuned by eye — D36), motion budget ≤0.5 Hz on `--tlcd-tick` (D37)
+  - Surfaced by: Design review D29/D36/D37
+  - Files: flair assets, synth.html port
+  - Verify: D33 visual pass at ~1 m — tier-1/2 values readable over busiest scene frame
+- [ ] **T14 (P2, human: ~2 h / CC: ~20 min)** — burn-in shuffle — equal-size permutation + crossfade + canonical/`shuffled` split (D28); atomic-rename layout writes
+  - Surfaced by: Design review D28 (also resolves suppressed concurrent-write finding)
+  - Files: dashboard.py, layout store
+  - Verify: shuffle never overwrites canonical; editor shows "last shuffled at HH:MM"
+- [ ] **T15 (P3, human: ~3 h / CC: ~30 min)** — device registry + multi-panel — per-device profile at handshake, `layouts/<serial>.json`, one pipeline per device, editor device selector when N>1
+  - Surfaced by: Multi-panel agreement (2026-10-08)
+  - Files: capture.py, dashboard.py, editor assets
+  - Verify: two panels → two canvases, selector lists both
+- [ ] **T16 (P3, human: ~2 h / CC: ~20 min)** — visual pass (D33) + docs/widgets.md authoring contract (D30) — widget manifest, resize modes, theme tokens, motion ceiling
+  - Surfaced by: Design review D30/D33
+  - Files: docs/widgets.md, mock assets
+  - Verify: a11y checklist (D35) + 1 m legibility test walked and recorded
+
+Effort ratios assumed features ~30x, tests ~50x, bug-fix ~20x human÷CC, adjusted down for small units.
+
+### Deferred (proposed TODOS.md entries)
+
+- **DESIGN.md formalization** — tokens live in the D32 section and synth.html until a `/design-consultation` pass writes a standalone DESIGN.md (source of truth: `~/projects/retro-synth/synth.html`).
+- **Keyboard drag-move/resize of widgets** — pointer-only at milestone one (D35); arrow-key GridStack dragging deferred, keyboard users can select and delete.
+- **Scene marketplace / additional scenes** — the flair contract (D29/D37) is scene-agnostic; more scenes are content, not platform work.
+
+## Unresolved decisions
+
+None — all six eng-review choices resolved with recorded answers (D5-D10); all 22 design-review decisions resolved with recorded answers (D18-D39). 0 unresolved across both reviews.
+
+## Suppressed findings (appendix)
+
+- [P3] (confidence: 6/10) dashboard.py layout persistence — concurrent layout.json writes (editor save vs burn-in shuffle timer) are last-write-wins under a threaded server. Single-user appliance risk; verify the thread model and consider atomic-rename writes when dashboard.py is built. Suppressed below the 7-confidence display bar per calibration rules. RESOLVED by D28 (2026-10-08): shuffle writes carry a `shuffled` field and never overwrite the canonical layout; atomic-rename writes still apply when dashboard.py is built.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Outside Review | codex via `/plan-eng-review` | Independent 2nd opinion | 1 | unavailable | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | 24 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps (required) | 1 | issues_resolved | 22 decisions (D18-D39), 0 unresolved; outside subagent 5 findings incl. 2 criticals — both resolved (D36/D37) |
+
+- **OUTSIDE COVERAGE (eng):** codex, plan-review phase — unavailable (Codex CLI not installed; native fallback unavailable in that session). No findings recorded.
+- **OUTSIDE COVERAGE (design):** native subagent, design-outside-voices — 5 findings delivered (2 critical: flair/legibility compositing stack, flair motion vs 6 FPS capture; 3 mid). Both criticals resolved: D36 (scanlines uncapped by explicit user choice, recorded as decision), D37 (0.5 Hz motion budget + `--tlcd-tick` adopted). Mids resolved via D18/D21/D23/D27/D31/D33.
+- **Design Review scores:** Pass 1 hierarchy 4→9, Pass 2 interactions 3→9, Pass 3 journeys 4→9, Pass 4 content 7→9, Pass 5 visual 4→9, Pass 6 responsive/a11y 3→9; Pass 7 decision register clean. **Overall 9/10.**
+- **VERDICT:** REVIEWED — build-ready. Design review 4/10 → 9/10 overall; 22 design decisions (D18-D39) recorded and applied to this plan; tasks T1-T16 cover eng + design findings; mockup assets approved (panel strip regen + config editor).
+
+NO UNRESOLVED DECISIONS
