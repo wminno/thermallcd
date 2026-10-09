@@ -43,12 +43,25 @@
   .grid {
     position: absolute; inset: 16px; z-index: 2;
     display: grid;
-    grid-template-columns: repeat(12, 1fr);
-    grid-template-rows: repeat(3, 1fr);
+    /* minmax(0,1fr): plain 1fr floors a track at its items' min-content —
+       an iframe contributes its intrinsic 150px height, which would grow
+       every row past the 138px track (D33) */
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr));
     gap: 8px;  /* D33 gutter */
   }
   .widget {
-    border: 1px solid rgba(40, 32, 67, .9);  /* hairline (D18 layer 2) */
+    /* iframes are replaced elements: grid stretch does not size them, so
+       each one renders at its intrinsic 300x150 unless told to fill its
+       area — width/height 100% makes the iframe content exactly the grid
+       area (w*150 + (w-1)*8 by h*138 + (h-1)*8, D33) */
+    width: 100%; height: 100%;
+    border: 0;   /* the UA gives iframes a 2px inset border — it padded every
+                    widget 4px past its slot and floored rows at intrinsic
+                    150px; the old author border masked it */
+    box-shadow: 0 0 0 1px rgba(40, 32, 67, .9);  /* hairline (D18 layer 2);
+                                                    outside the box so the
+                                                    content keeps full size */
     border-radius: 6px;                       /* D33 radius */
     background: rgba(15, 11, 29, .82);        /* adjustable glass (editor slider) */
     backdrop-filter: blur(2px);

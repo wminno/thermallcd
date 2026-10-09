@@ -79,9 +79,24 @@
     transform: scale(.5); transform-origin: 0 0;
     pointer-events: none;             /* drags go to the overlay, not the preview */
   }
-  /* GridStack overlay: dashboard grid (inset 16, gap 8, cells 150x138) at 0.5x */
+  /* GridStack overlay: dashboard grid (inset 16, gap 8, tracks 150x138) at 0.5x.
+     Half-scale pitch is 79x73; GridStack keeps its 2px margins INSIDE item
+     boxes, so the container sits at (6,6) sized 12*79 x 3*73 and item content
+     (75x69) lands exactly on dashboard track origins (8 + 79*i, 8 + 73*j).
+     The background paints those same content cells: a 75x69 fill inside each
+     79x73 tile, offset 2px — free space lights up, gutters stay dark. */
   #tlcd-canvas {
-    position: absolute; left: 8px; top: 8px; width: 944px; height: 215px;
+    position: absolute; left: 6px; top: 6px; width: 948px; height: 219px;
+    background-image:
+      linear-gradient(90deg, transparent 2px, rgba(143, 135, 174, .09) 2px,
+        rgba(143, 135, 174, .09) calc(100% - 2px), transparent calc(100% - 2px)),
+      linear-gradient(180deg, transparent 2px, rgba(143, 135, 174, .09) 2px,
+        rgba(143, 135, 174, .09) calc(100% - 2px), transparent calc(100% - 2px));
+    background-size: 79px 73px;
+  }
+  .grid-stack-placeholder > .placeholder-content {
+    background: rgba(255, 46, 131, .16);      /* accent tint over the cells */
+    outline: 1px dashed var(--tlcd-accent);   /* the widget will land here */
   }
   .grid-stack-item .grid-stack-item-content { overflow: visible; }
   .tlcd-tag {
@@ -144,8 +159,10 @@
 "use strict";
 var grid = GridStack.init({
   column: 12,
-  cellHeight: 69,          // dashboard rows are 138px at full scale
-  margin: 2,               // dashboard gutter is 8px at full scale
+  cellHeight: 73,          // dashboard rows are 138px + 8 gutter = 73 pitch at 0.5x
+  margin: 2,               // inside item boxes: content is 75x69 = a dashboard track
+  acceptWidgets: ".palette-item",  // palette drag-in: creates the grid's
+                                   // droppable so an external drop can land
   minRow: 3, maxRow: 3,    // the panel is a fixed 12x3 (D33)
   float: true,
   disableOneColumnMode: true,
@@ -163,7 +180,10 @@ var redoBtn = document.getElementById("redo");
 var toast = document.getElementById("toast");
 
 function nodes() {
-  return grid.save().map(function (n) {
+  // read the live nodes, not grid.save(): optimized save output omits w/h
+  // when they hit defaults (h = 1, w reaching the last column), and the
+  // server rejects layouts without integer w/h
+  return grid.engine.nodes.map(function (n) {
     return { id: n.id, x: n.x, y: n.y, w: n.w, h: n.h };
   });
 }
@@ -197,13 +217,19 @@ function updateChrome() {
   var placed = {};
   nodes().forEach(function (n) { placed[n.id] = true; });
   Object.keys(paletteBtns).forEach(function (name) {
-    paletteBtns[name].disabled = !!placed[name];
+    var btn = paletteBtns[name];
+    var on = !!placed[name];
+    btn.disabled = on;
+    btn.title = on ? name + " — already placed"
+                   : (widgetsByName[name].description || name);
+    btn.querySelector(".badge").textContent = on ? "placed" : btn.dataset.size;
   });
 }
 
 function markDirty() { updateChrome(); }
 
 grid.on("change", function () { snapshot(); });
+grid.on("added", function () { snapshot(); });     // palette drag-in drop
 grid.on("removed", function () { snapshot(); });  // deletions may not fire change
 
 // -- selection + delete (D31: click-to-select, delete button on the card) --
@@ -303,10 +329,11 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     var btn = document.createElement("button");
     btn.className = "palette-item";
     btn.title = w.description || w.name;
+    btn.dataset.size = w.size.w + "x" + w.size.h;
     paletteBtns[w.name] = btn;
     btn.innerHTML = "<span></span><span class='badge'></span>";
     btn.querySelector("span").textContent = (w.title || w.name);
-    btn.querySelector(".badge").textContent = w.size.w + "x" + w.size.h;
+    btn.querySelector(".badge").textContent = btn.dataset.size;
     btn.addEventListener("click", function () {
       var node = { id: w.name, w: w.size.w, h: w.size.h };
       if (w.min) { node.minW = w.min.w; node.minH = w.min.h; }
@@ -315,6 +342,24 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     });
     aside.appendChild(btn);
   });
+
+  // drag a palette entry straight onto the canvas — click-to-add still works.
+  // The node carries the widget's size and id, so the dropped item lands at
+  // the drop cell with the right footprint and saves under its registry name.
+  // No `grid` backref: the drag layer wires the drop through the grid's
+  // droppable (acceptWidgets above), and a node claiming this grid makes the
+  // drop handler treat it as an internal move — the widget never lands.
+  // Disabled (already placed) buttons get no pointer events, so they cannot
+  // drag in either.
+  var names = Object.keys(widgetsByName);
+  GridStack.setupDragIn(names.map(function (n) { return paletteBtns[n]; }),
+    { helper: "clone" },
+    names.map(function (n) {
+      var w = widgetsByName[n];
+      var node = { id: n, w: w.size.w, h: w.size.h };
+      if (w.min) { node.minW = w.min.w; node.minH = w.min.h; }
+      return node;
+    }));
 
   // layout loads only after the registry is known, so chips resolve titles
   return fetch("/api/layout?device=default").then(function (r) { return r.json(); });
