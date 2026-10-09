@@ -202,6 +202,10 @@ function pushPreview() {
     { tlcdPreview: { widgets: nodes() } }, location.origin);
 }
 previewFrame.addEventListener("load", pushPreview);  // post-save reload re-pushes
+// a push lost while the preview reloads (its message listener is briefly
+// absent) would otherwise leave the preview stale until the next edit —
+// re-pushing makes the preview eventually-consistent with the editor
+setInterval(pushPreview, 2000);
 
 function snapshot() {
   if (loading) return;

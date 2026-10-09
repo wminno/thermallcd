@@ -112,6 +112,15 @@
     var grid = document.querySelector(".grid");
     var keep = {};
     var latest = {};
+    // self-heal: drop duplicate same-wid frames (a page that lived through
+    // the pre-guard duplicate race cleans itself on the next push; keep the
+    // first — it is the one later pushes have been repositioning)
+    var seenWid = {};
+    grid.querySelectorAll("iframe.widget").forEach(function (f) {
+      var id = f.getAttribute("data-wid");
+      if (seenWid[id]) { f.remove(); return; }
+      seenWid[id] = true;
+    });
     widgets.forEach(function (w) { latest[w.id] = w; });
     widgets.forEach(function (w) {
       keep[w.id] = true;
