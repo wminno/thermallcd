@@ -111,6 +111,8 @@
   function renderPreview(widgets) {
     var grid = document.querySelector(".grid");
     var keep = {};
+    var latest = {};
+    widgets.forEach(function (w) { latest[w.id] = w; });
     widgets.forEach(function (w) {
       keep[w.id] = true;
       var col = (w.x + 1) + " / span " + w.w;
@@ -125,7 +127,13 @@
             "&token=" + encodeURIComponent(window.TLCD_TOKEN))
         .then(function (r) { return r.json(); })
         .then(function (doc) {
-          if (!doc.srcdoc) return;
+          // rapid pushes (drags fire change continuously) must not stack
+          // duplicate frames while an earlier response is in flight: only
+          // the newest push may add, and only if no frame exists yet — a
+          // leftover duplicate would freeze at its old slot and look like
+          // the widgets swapped places
+          if (!doc.srcdoc || latest[w.id] !== w) return;
+          if (grid.querySelector('iframe[data-wid="' + w.id + '"]')) return;
           var nf = document.createElement("iframe");
           nf.className = "widget";
           nf.setAttribute("data-wid", w.id);
