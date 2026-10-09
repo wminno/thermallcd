@@ -172,8 +172,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self.server.metrics.snapshot())
         if route == "/api/nvtop":
             # image-source widget (T4): the pane's TUI as JPEG; 404 when the
-            # layout has no nvtop slot — the widget dims, never fabricates
-            data = self.server.nvtop.jpeg()
+            # layout has no nvtop slot — the widget dims, never fabricates.
+            # w/h: the widget's measured content box (slot minus its title +
+            # padding chrome), so the TUI renders 1:1 under that chrome
+            def _box(key):
+                try:
+                    return int(query.get(key, [None])[0])
+                except (TypeError, ValueError):
+                    return None
+            data = self.server.nvtop.jpeg(_box("w"), _box("h"))
             if data is None:
                 return self._json(404, {"error": "nvtop not placed"})
             return self._send(200, data, "image/jpeg")
@@ -266,6 +273,9 @@ class Handler(BaseHTTPRequestHandler):
         shuffle = self.server.layout.shuffle_state("default")
         if shuffle:
             layout = {**layout, "widgets": shuffle["widgets"]}
+        # D29: synthwave on from first boot — a layout without a flair key
+        # (or one saved before T13) renders the defaults
+        flair = {**layout_mod.DEFAULT_FLAIR, **(layout.get("flair") or {})}
         token = self._token_supplied()
         slots, srcdocs = [], []
         for item in layout["widgets"]:
@@ -274,7 +284,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue  # absent/malformed widget: the scene shows through (D22/D25)
             slots.append((item, entry))
             srcdocs.append(_widget_srcdoc(self.server.registry, item["id"], token))
-        page = _render_dashboard(self.server, slots, srcdocs, token)
+        page = _render_dashboard(self.server, slots, srcdocs, token, flair)
         return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
 
@@ -296,7 +306,7 @@ def _widget_srcdoc(registry, name: str, token: str) -> str:
     return html.escape(_widget_doc(registry, name, token), quote=True)
 
 
-def _render_dashboard(server, slots, srcdocs, token: str) -> str:
+def _render_dashboard(server, slots, srcdocs, token: str, flair: dict) -> str:
     url = lan_url(server.port)
     claimed = server.token.claimed()
     # D20: the full token prints on the panel until the first successful
@@ -318,6 +328,8 @@ def _render_dashboard(server, slots, srcdocs, token: str) -> str:
     return (template
             .replace("/*__WATERMARK__*/", watermark)
             .replace("/*__FRAMES__*/", "\n".join(frames))
+            .replace("__FLAIR__", json.dumps(flair))
+            .replace("__GLASS__", json.dumps(flair.get("glass", 0.82)))
             .replace("__TOKEN__", json.dumps(token)))
 
 

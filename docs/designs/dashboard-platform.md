@@ -562,6 +562,9 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [ ] **T21 (P3, user request 2026-10-09)** — Spotify "now playing" widget: current track/artist/album art via the Spotify account API
   - Needs: user's own Spotify API key/credentials entered in widget settings (stored per-widget, gitignored), token refresh handling, idle state when nothing plays
   - Verify: art + track title update while music plays; clean idle state when paused
+- [ ] **T22 (P3, backup option, user request 2026-10-09)** — pre-rendered flair: render each flair scene/theme/motion combo to a seamlessly self-looping video and use it as the backdrop instead of live canvas rendering
+  - Status: backup only — measured live cost is ~1 ms/scene render at 0.5 Hz (D37 tick) with GPU compositing (capture.py `--use-angle=vulkan`, RADV); a looping video would add a continuous decoder + constant capture churn and lose the load-reactive spectrum
+  - Trigger to revisit: if a future flair addition (full-motion scenes, richer effects) pushes live render cost past the tick budget, or the GPU path proves unstable on a driver update
 
 Effort ratios assumed features ~30x, tests ~50x, bug-fix ~20x human÷CC, adjusted down for small units.
 

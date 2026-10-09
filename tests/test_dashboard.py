@@ -254,5 +254,67 @@ class TestLayoutAPI(PlatformTestBase):
         self.assertEqual((status, doc["claimed"]), (200, False))
 
 
+class TestFlairLayout(PlatformTestBase):
+    """T13: the flair config rides the layout doc (validated, normalized)."""
+
+    def test_put_then_get_roundtrip(self):
+        layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}],
+                  "flair": {"scene": "city", "theme": "noir", "motion": "forward",
+                            "glass": 0.5, "spectrum": False, "stars": False}}
+        status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev", method="PUT",
+                             token=self.token.token, body=layout)
+        self.assertEqual(status, 200)
+        status, _, doc = _http(f"{self.base}/api/layout?device=flair-dev",
+                               token=self.token.token)
+        self.assertEqual(status, 200)
+        # defaults fill the keys the editor did not send (road, scanlines)
+        self.assertEqual(doc["flair"], {
+            "scene": "city", "theme": "noir", "motion": "forward",
+            "glass": 0.5, "spectrum": False, "stars": False, "road": False,
+            "scanlines": True})
+
+    def test_glass_clamped_and_unknown_keys_dropped(self):
+        layout = {"widgets": [], "flair": {"glass": 1.7, "scene": "grid",
+                                           "nonsense": True}}
+        status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev", method="PUT",
+                             token=self.token.token, body=layout)
+        self.assertEqual(status, 200)
+        _, _, doc = _http(f"{self.base}/api/layout?device=flair-dev",
+                          token=self.token.token)
+        self.assertEqual(doc["flair"]["glass"], 1.0)
+        self.assertNotIn("nonsense", doc["flair"])
+
+    def test_bad_flair_400(self):
+        for flair in ({"scene": "bogus"}, {"theme": 7}, {"motion": "sideways"},
+                      {"glass": "x"}, "yes"):
+            layout = {"widgets": [], "flair": flair}
+            status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev",
+                                 method="PUT", token=self.token.token, body=layout)
+            self.assertEqual(status, 400, f"flair={flair!r}")
+
+    def test_dashboard_renders_flair_defaults(self):
+        # D29: synthwave on from first boot — a layout without a flair key
+        # still injects the default config and the glass variable
+        status, _, page = _http(f"{self.base}/", token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertIn("window.TLCD_FLAIR=", page)
+        self.assertIn('"scene": "sunset"', page)
+        self.assertIn("--tlcd-glass: 0.82", page)
+        self.assertIn('id="flair-scene"', page)
+        self.assertIn("/assets/flair.js", page)
+
+    def test_dashboard_renders_saved_flair(self):
+        layout = {"widgets": [], "flair": {"scene": "mesa", "theme": "cyber"}}
+        # the dashboard serves device "default"
+        _http(f"{self.base}/api/layout?device=default", method="PUT",
+              token=self.token.token, body=layout)
+        _, _, page = _http(f"{self.base}/", token=self.token.token)
+        self.assertIn('"scene": "mesa"', page)
+        self.assertIn('"theme": "cyber"', page)
+        # cleanup: restore the stock default layout for other tests
+        _http(f"{self.base}/api/layout?device=default", method="PUT",
+              token=self.token.token, body=layout_mod.DEFAULT_LAYOUT)
+
+
 if __name__ == "__main__":
     unittest.main()

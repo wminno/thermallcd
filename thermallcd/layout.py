@@ -30,6 +30,49 @@ DEFAULT_LAYOUT = {
 GRID_COLS = 12
 GRID_ROWS = 3
 
+# T13 flair: the background scene layer config, stored alongside the widgets.
+# Synthwave is on from first boot (D29): a layout without a flair key renders
+# DEFAULT_FLAIR; the editor saves the merged object from its first save on.
+FLAIR_SCENES = {"sunset", "grid", "ridge", "city", "twin", "valley",
+                "canyon", "mesa"}
+FLAIR_THEMES = {"synthwave", "vaporwave", "outrun", "miami", "cyber", "noir"}
+FLAIR_MOTIONS = {"left", "right", "forward", "backward", "none"}
+DEFAULT_FLAIR = {
+    "scene": "sunset",
+    "theme": "synthwave",
+    "motion": "right",
+    "glass": 0.82,
+    "spectrum": True,
+    "stars": True,
+    "road": False,
+    "scanlines": True,
+}
+
+
+def _normalize_flair(flair):
+    """Validated copy of the flair config, or an error string.
+
+    Unknown keys are dropped (forward-compatible), glass is clamped to 0..1
+    (a slider jitter should not 400), booleans are coerced."""
+    if not isinstance(flair, dict):
+        return None, "flair must be an object"
+    out = dict(DEFAULT_FLAIR)
+    for key, value in flair.items():
+        if key in ("scene", "theme", "motion"):
+            whitelist = {"scene": FLAIR_SCENES, "theme": FLAIR_THEMES,
+                         "motion": FLAIR_MOTIONS}[key]
+            if value not in whitelist:
+                return None, f"flair.{key}: {value!r} is not one of {sorted(whitelist)}"
+            out[key] = value
+        elif key == "glass":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return None, "flair.glass must be a number"
+            out[key] = round(max(0.0, min(1.0, float(value))), 3)
+        elif key in ("spectrum", "stars", "road", "scanlines"):
+            out[key] = bool(value)
+        # unknown keys: dropped silently
+    return out, None
+
 
 def _atomic_write(path: Path, payload: dict):
     body = json.dumps(payload, indent=2)
@@ -50,6 +93,10 @@ def _validate_layout(layout: dict) -> str | None:
     """Basic shape validation; returns an error string or None."""
     if not isinstance(layout, dict) or not isinstance(layout.get("widgets"), list):
         return "layout must be an object with a widgets array"
+    if "flair" in layout and layout["flair"] is not None:
+        _, error = _normalize_flair(layout["flair"])
+        if error:
+            return error
     for item in layout["widgets"]:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             return "each widget needs an id string"
@@ -109,6 +156,13 @@ class LayoutStore:
                    "shuffled_at": time.time()}
             _atomic_write(self._shuffle(device), doc)  # D28: never touches canonical
             return doc
+        # store the normalized flair (defaults filled, unknown keys dropped)
+        # so the canonical file is always a complete document
+        if layout.get("flair") is not None:
+            flair, err = _normalize_flair(layout["flair"])
+            if err:
+                raise ValueError(err)
+            layout = {**layout, "flair": flair}
         _atomic_write(self._canonical(device), layout)
         return layout
 

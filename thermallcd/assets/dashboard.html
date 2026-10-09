@@ -4,35 +4,24 @@
 <meta charset="utf-8">
 <title>thermallcd</title>
 <script>window.TLCD_TOKEN=__TOKEN__;</script>
+<script>window.TLCD_FLAIR=__FLAIR__;</script>
 <style>
   html, body { margin: 0; width: 1920px; height: 462px; overflow: hidden; }
+  :root { --tlcd-glass: __GLASS__; }   /* widget glass, editor slider (flair) */
   body {
-    /* scene layer (z 1): synthwave ground + grid horizon — static CSS for now;
-       the animated scene (synth.html port) lands with T13 and obeys --tlcd-tick */
+    /* boot fallback only — the flair canvas (z 1) paints the scene over it
+       on its first platform tick; kept so a failed flair.js still shows a
+       synthwave ground instead of a black panel */
     background:
       radial-gradient(120% 160% at 18% 110%, #2a0f3f 0%, rgba(42,15,63,0) 55%),
       linear-gradient(180deg, #07060d 0%, #0d0821 55%, #160b2e 78%, #1d0f38 100%);
     font-family: var(--tlcd-font-mono, monospace);
   }
-  /* perspective grid hint, bottom band (z 1, part of the scene) */
-  body::before {
-    content: ""; position: absolute; inset: auto 0 0 0; height: 140px;
-    background:
-      linear-gradient(rgba(255,46,131,.22) 1px, transparent 1px) 0 0 / 100% 32px,
-      linear-gradient(90deg, rgba(255,46,131,.22) 1px, transparent 1px) 0 0 / 48px 100%;
-    transform: perspective(420px) rotateX(56deg) scale(1.6);
-    transform-origin: bottom;
-    opacity: .5;
-  }
-  /* neon sun accent, left third (z 1) */
-  body::after {
-    content: ""; position: absolute; left: 13%; top: 24%;
-    width: 150px; height: 150px; border-radius: 50%;
-    background: linear-gradient(180deg, #ff9a3d 0%, #ff2e83 62%, #b0186a 100%);
-    box-shadow: 0 0 60px rgba(255,46,131,.5);
-    mask: linear-gradient(180deg, #000 62%, transparent 62%) ;
-    -webkit-mask: linear-gradient(180deg, #000 62%, transparent 62%);
-    opacity: .85;
+  /* scene layer (z 1): the synth.html port (flair.js), stepped by the
+     platform tick — see the script block (D37 motion budget) */
+  #flair-scene {
+    position: absolute; left: 0; top: 0; z-index: 1;
+    width: 1920px; height: 462px;
   }
   /* scanline overlay (z 3): uncapped by decision D36, tuned by eye at the visual pass */
   .scanlines {
@@ -63,7 +52,7 @@
                                                     outside the box so the
                                                     content keeps full size */
     border-radius: 6px;                       /* D33 radius */
-    background: rgba(15, 11, 29, .82);        /* adjustable glass (editor slider) */
+    background: rgba(15, 11, 29, var(--tlcd-glass, .82));  /* glass, editor slider */
     backdrop-filter: blur(2px);
     overflow: hidden;
     opacity: 0;                               /* D22: fade in on first render */
@@ -81,12 +70,32 @@
 </style>
 </head>
 <body>
+  <canvas id="flair-scene" width="1920" height="462"></canvas>
   <div class="grid">
     /*__FRAMES__*/
   </div>
   <div class="scanlines"></div>
   <div class="watermark">/*__WATERMARK__*/</div>
+<script src="/assets/flair.js"></script>
 <script>
+  // boot: hide the scanline overlay before first paint when the saved flair
+  // config turned it off (the editor path goes through renderPreview instead)
+  if (window.TLCD_FLAIR && window.TLCD_FLAIR.scanlines === false) {
+    document.querySelector(".scanlines").style.display = "none";
+  }
+
+  // D37 motion budget: the platform tick. --tlcd-tick steps at 0.5 Hz (the
+  // budget ceiling for anything that moves on this page) and flair steps one
+  // deliberate repaint per tick — between ticks nothing paints, so the
+  // capture's frame clock sees one settled frame per tick, never churn.
+  // Widgets that later want in on the budget read --tlcd-tick.
+  var tlcdTick = 0;
+  setInterval(function () {
+    tlcdTick++;
+    document.documentElement.style.setProperty("--tlcd-tick", tlcdTick);
+    if (window.TLCDFlair) window.TLCDFlair.step();
+  }, 2000);
+
   // D27: a saved layout change is visible on the panel within one second
   (function pollLayout() {
     var etag = "";
@@ -108,7 +117,25 @@
   // frame from /api/frame; ids gone from the layout leave. After a
   // post-save reload (the poll above) the server markup is already
   // current, so the editor's re-push is a no-op reposition.
-  function renderPreview(widgets) {
+  var lastFlairJson = "";
+  function renderPreview(widgets, flair) {
+    // flair rides the same push: the editor's picker hot-swaps the scene and
+    // the glass without a reload, mirroring how widget frames glide. The
+    // editor re-pushes every 2 s, so skip unchanged configs — an apply()
+    // forces a full scene render, and it must not double with the tick.
+    if (flair) {
+      var j = JSON.stringify(flair);
+      if (j !== lastFlairJson) {
+        lastFlairJson = j;
+        if (window.TLCDFlair) window.TLCDFlair.apply(flair);
+        document.documentElement.style.setProperty("--tlcd-glass",
+          Math.max(0, Math.min(1, Number(flair.glass) || 0.82)));
+        // CRT scanline overlay (D36): a DOM layer above the scene, so the
+        // toggle is a display flip here, not a scene re-render
+        var sl = document.querySelector(".scanlines");
+        if (sl) sl.style.display = flair.scanlines === false ? "none" : "";
+      }
+    }
     var grid = document.querySelector(".grid");
     var keep = {};
     var latest = {};
@@ -160,7 +187,7 @@
   }
   window.addEventListener("message", function (e) {
     if (e.origin !== location.origin || !e.data || !e.data.tlcdPreview) return;
-    renderPreview(e.data.tlcdPreview.widgets);
+    renderPreview(e.data.tlcdPreview.widgets, e.data.tlcdPreview.flair);
   });
 </script>
 </body>

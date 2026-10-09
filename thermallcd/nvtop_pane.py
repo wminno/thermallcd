@@ -239,7 +239,7 @@ class NvtopSource:
         self.layout = layout          # LayoutStore — re-read per request
         self.binary = binary
         self._pane = None
-        self._slot = None             # (w, h) the pane was built for
+        self._box = None              # (wpx, hpx) the pane was built for
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._repaints = threading.Thread(target=self._repaint_loop, daemon=True)
@@ -264,20 +264,45 @@ class NvtopSource:
                 if self._pane:
                     self._pane.force_repaint()
 
-    def jpeg(self):
-        """JPEG of the pane at the current slot; None when no slot/binary."""
+    def jpeg(self, wpx=None, hpx=None):
+        """JPEG of the pane; None when no slot/binary.
+
+        (wpx, hpx) is the widget's measured content box — its slot minus the
+        title strip and body padding — so the TUI renders 1:1 under the widget
+        chrome. Rendering at the raw slot made the img overflow its iframe and
+        clip the TUI's bottom rows. Requests without w/h (legacy tabs) are
+        served at the pane's current size and never resize it; the pane never
+        exceeds the slot either way."""
         slot = self._slot_size()
         if slot is None or not os.path.isfile(self.binary):
             self._drop()
             return None
-        wpx, hpx = self.pixels(*slot)
+        slot_px = self.pixels(*slot)
         with self._lock:
-            if self._slot != slot or self._pane is None:
+            if wpx is None or hpx is None:
+                box = None    # legacy requester (no w/h) — see below
+            else:
+                try:
+                    box = (max(60, min(int(wpx), slot_px[0])),
+                           max(40, min(int(hpx), slot_px[1])))
+                except (TypeError, ValueError):
+                    box = None
+            # only chrome-aware requests (w/h present) may move the pane.
+            # Legacy polls — a tab running pre-contract widget JS, another
+            # viewer's preview — are served at the pane's current size instead:
+            # letting them resize too let two viewers with different boxes tug
+            # the pty size back and forth every poll, which restarts nvtop
+            # faster than it can draw and blanks the panel's widget.
+            if box is not None and (box != self._box or self._pane is None):
                 if self._pane:
                     self._pane.stop()   # recreate: resize = new pty size (D19)
-                self._pane = NvtopPane.for_area(wpx, hpx, binary=self.binary)
-                self._slot = slot
-            img = self._pane.render(wpx, hpx)
+                self._pane = NvtopPane.for_area(*box, binary=self.binary)
+                self._box = box
+            elif self._pane is None:
+                # first requester is legacy: build at the raw slot (old shape)
+                self._pane = NvtopPane.for_area(*slot_px, binary=self.binary)
+                self._box = slot_px
+            img = self._pane.render(*self._box)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         return buf.getvalue()
@@ -286,7 +311,7 @@ class NvtopSource:
         with self._lock:
             if self._pane:
                 self._pane.stop()
-            self._pane, self._slot = None, None
+            self._pane, self._box = None, None
 
     def stop(self):
         self._stop.set()

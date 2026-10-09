@@ -90,7 +90,12 @@ class Chromium:
                 "--headless=new",
                 f"--remote-debugging-port={self.port}",
                 f"--window-size={self.width},{self.height}",
-                "--disable-gpu",
+                # GPU compositing: headless picks SwiftShader (software) by
+                # default even without --disable-gpu; ANGLE Vulkan hits the
+                # real GPU (RADV), so the flair canvas + per-widget backdrop
+                # blur composite at speed. If a driver update makes the
+                # screencast unstable, dropping these is the fallback.
+                "--use-angle=vulkan",
                 # newer chromium rejects CDP websockets without an allow-list;
                 # the port binds 127.0.0.1, so this stays local
                 "--remote-allow-origins=*",
@@ -142,10 +147,13 @@ class Chromium:
 class Screencast:
     """CDP screencast -> callback(jpeg_bytes), throttled, acked."""
 
-    def __init__(self, ws_url: str, on_frame, fps: float = FPS_DEFAULT):
+    def __init__(self, ws_url: str, on_frame, fps: float = FPS_DEFAULT,
+                 width: int = lcd.WIDTH, height: int = lcd.HEIGHT):
         self.ws_url = ws_url
         self.on_frame = on_frame
         self.min_interval = 1.0 / fps
+        self.width = width
+        self.height = height
         self.stale_s = STALE_FRAME_S
         self.max_stale_rearms = 3  # 3 x stale_s with zero frames = stuck
         self._stale_streak = 0
@@ -168,6 +176,17 @@ class Screencast:
     def run(self):
         ws = websocket.create_connection(self.ws_url, timeout=5, enable_multithread=True)
         ws.send(json.dumps({"id": 1, "method": "Page.enable"}))
+        # Pin the viewport to the panel geometry. headless=new windows carry
+        # real browser UI — an omnibox popup was seen eating 87px off the
+        # viewport — so --window-size alone does not guarantee the page lays
+        # out at panel size, and to_panel_frame stretches whatever it gets to
+        # the firmware contract: a short viewport means a soft, compressed
+        # panel image. Emulation pins the layout viewport to exactly WxH.
+        ws.send(json.dumps({
+            "id": 2, "method": "Emulation.setDeviceMetricsOverride",
+            "params": {"width": self.width, "height": self.height,
+                       "deviceScaleFactor": 1, "mobile": False},
+        }))
         self._msg_id = self._start(ws, self._msg_id)
         self._last_frame = time.time()
         try:
@@ -288,7 +307,8 @@ def main(argv=None):
             panel.open()
             info = panel.init()
             print(f"capture: panel opened (pm={info['pm']} sub={info['sub']})")
-        cast = Screencast(chromium.page_ws_url(), on_frame, fps=args.fps)
+        cast = Screencast(chromium.page_ws_url(), on_frame, fps=args.fps,
+                          width=chromium.width, height=chromium.height)
         thread = threading.Thread(target=cast.run, daemon=True)
         thread.start()
 

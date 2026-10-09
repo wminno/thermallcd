@@ -124,6 +124,29 @@
   }
   #toast.show { opacity: 1; }
 
+  /* T13 flair picker: scene thumbnails are real flair.js renders (D29) */
+  .flair-thumb {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--tlcd-line); border-radius: 4px;
+    cursor: pointer; padding: 0; background: #07060d;
+  }
+  .flair-thumb:hover { border-color: var(--tlcd-accent); }
+  .flair-thumb.selected { outline: 2px solid var(--tlcd-accent); outline-offset: -1px; }
+  .flair-row {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+  }
+  .flair-row label { font-size: 12px; color: var(--tlcd-dim); flex: 1; }
+  .flair-row select, .flair-row input[type="range"] {
+    flex: 2; min-height: 32px; background: var(--tlcd-field);
+    color: var(--tlcd-text); border: 1px solid var(--tlcd-line);
+    border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 6px;
+  }
+  .flair-check {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+    font-size: 12px; color: var(--tlcd-text); cursor: pointer;
+  }
+  .flair-check input { width: 16px; height: 16px; accent-color: var(--tlcd-accent); }
+
   /* D34: below 1024px the palette collapses to a toggleable drawer */
   @media (max-width: 1023px) {
     #palette-toggle { display: block; }
@@ -155,6 +178,9 @@
 <div id="toast" role="status"></div>
 <!-- gridstack-all.js is the UMD bundle: defines the GridStack global -->
 <script src="/assets/vendor/gridstack.min.js"></script>
+<!-- flair engine: the editor only paints scene thumbnails with it
+     (TLCDFlair.paintThumb); the live scene runs inside the preview iframe -->
+<script src="/assets/flair.js"></script>
 <script>
 "use strict";
 var grid = GridStack.init({
@@ -194,12 +220,13 @@ function nodes() {
 // authoritative for SAVED changes; this only mirrors the editing state.
 var previewFrame = document.querySelector(".canvas iframe");
 var layoutReady = false;
+var pendingFlair = null;   // T13: flair rides the same push + save path
 function pushPreview() {
   // before the initial layout load the server render already matches the
   // grid — pushing the empty grid would needlessly drop every frame
   if (!layoutReady) return;
   previewFrame.contentWindow.postMessage(
-    { tlcdPreview: { widgets: nodes() } }, location.origin);
+    { tlcdPreview: { widgets: nodes(), flair: pendingFlair } }, location.origin);
 }
 previewFrame.addEventListener("load", pushPreview);  // post-save reload re-pushes
 // a push lost while the preview reloads (its message listener is briefly
@@ -307,7 +334,7 @@ saveBtn.addEventListener("click", function () {
   fetch("/api/layout?device=default", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ widgets: nodes() }),
+    body: JSON.stringify({ widgets: nodes(), flair: pendingFlair }),
   }).then(function (r) {
     if (!r.ok) throw new Error(r.status);
     baselinePtr = ptr;
@@ -385,6 +412,7 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   // layout loads only after the registry is known, so chips resolve titles
   return fetch("/api/layout?device=default").then(function (r) { return r.json(); });
 }).then(function (doc) {
+  initFlair(doc && doc.flair);
   if (!doc) return;
   loading = true;
   grid.load(doc.widgets.map(function (it) {
@@ -401,6 +429,145 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   layoutReady = true;
   pushPreview();
 });
+
+// -- T13 flair picker (D29: thumbnail strip with live mini-previews) --
+// Thumbnails are real flair.js renders of each scene in the current theme;
+// the preview iframe runs the live scene, so every control here is visible
+// in place before any save.
+var flairThumbs = {};      // scene key -> canvas element
+var flairEls = {};         // control elements by name
+
+function flairMotionOptions(scene) {
+  // scenes with a terrain corridor only drive forward/backward/still
+  var allowed = window.TLCDFlair.SCENES[scene].motions || Object.keys(TLCDFlair.MOTIONS);
+  return allowed.map(function (m) { return [m, TLCDFlair.MOTIONS[m]]; });
+}
+
+function refreshFlairThumbs() {
+  Object.keys(flairThumbs).forEach(function (scene) {
+    window.TLCDFlair.paintThumb(flairThumbs[scene],
+      {scene: scene, theme: pendingFlair.theme, motion: pendingFlair.motion,
+       stars: pendingFlair.stars});
+    flairThumbs[scene].classList.toggle("selected", pendingFlair.scene === scene);
+  });
+}
+
+function refreshFlairUI(needsThumbs) {
+  Object.keys(flairEls).forEach(function (k) {
+    var el = flairEls[k];
+    if (k === "glass") el.value = Math.round(pendingFlair.glass * 100);
+    else if (el.type === "checkbox") el.checked = !!pendingFlair[k];
+    else if (el.tagName === "SELECT" && k === "motion") {
+      el.textContent = "";
+      flairMotionOptions(pendingFlair.scene).forEach(function (pair) {
+        var opt = document.createElement("option");
+        opt.value = pair[0]; opt.textContent = pair[1];
+        el.appendChild(opt);
+      });
+      el.value = pendingFlair.motion;
+    } else if (el.tagName === "SELECT") el.value = pendingFlair[k];
+  });
+  // thumbnails are 8 full scene renders: only re-render them when something
+  // that changes their pixels moved — the glass slider fires 'input'
+  // continuously while dragging, and the thumbs are glass-independent.
+  // Default true: initFlair's bare refreshFlairUI() must paint them too.
+  if (needsThumbs !== false) refreshFlairThumbs();
+}
+
+function flairChanged(needsThumbs) {
+  // thumbs default ON: scene/theme/stars change the canvas pixels. Controls
+  // that cannot — the glass slider (fires 'input' continuously), spectrum
+  // (paintThumb forces it off), scanlines (a DOM overlay, not canvas) —
+  // pass false to skip re-rendering all 8 thumbnails.
+  refreshFlairUI(needsThumbs !== false);
+  pushPreview();
+}
+
+function initFlair(saved) {
+  if (flairEls.scene) return;               // editor tab re-runs only on reload
+  pendingFlair = Object.assign({}, window.TLCDFlair.DEFAULTS, saved || {});
+  var aside = document.getElementById("palette");
+
+  var h2 = document.createElement("h2");
+  h2.textContent = "FLAIR";
+  aside.appendChild(h2);
+
+  Object.keys(window.TLCDFlair.SCENES).forEach(function (scene) {
+    var c = document.createElement("canvas");
+    c.className = "flair-thumb";
+    c.width = 256; c.height = 62;           // panel aspect (1920x462 / 7.5)
+    c.title = window.TLCDFlair.SCENES[scene].label;
+    c.addEventListener("click", function () {
+      if (pendingFlair.scene === scene) return;
+      pendingFlair.scene = scene;
+      // terrain scenes restrict motion; coerce and let the select rebuild
+      var allowed = window.TLCDFlair.SCENES[scene].motions;
+      if (allowed && allowed.indexOf(pendingFlair.motion) < 0)
+        pendingFlair.motion = allowed[0];
+      flairChanged();
+    });
+    aside.appendChild(c);
+    flairThumbs[scene] = c;
+  });
+
+  function row(labelText, control) {
+    var wrap = document.createElement("div");
+    wrap.className = "flair-row";
+    var label = document.createElement("label");
+    label.textContent = labelText;
+    wrap.appendChild(label);
+    wrap.appendChild(control);
+    aside.appendChild(wrap);
+    return control;
+  }
+  function checkbox(labelText, key, needsThumbs) {
+    var wrap = document.createElement("label");
+    wrap.className = "flair-check";
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.addEventListener("change", function () {
+      pendingFlair[key] = input.checked;
+      flairChanged(needsThumbs);
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(document.createTextNode(labelText));
+    aside.appendChild(wrap);
+    return input;
+  }
+
+  var theme = document.createElement("select");
+  Object.keys(window.TLCDFlair.THEMES).forEach(function (t) {
+    var opt = document.createElement("option");
+    opt.value = t; opt.textContent = window.TLCDFlair.THEMES[t].label;
+    theme.appendChild(opt);
+  });
+  theme.addEventListener("change", function () {
+    pendingFlair.theme = theme.value;
+    flairChanged();
+  });
+  flairEls.theme = row("theme", theme);
+
+  var motion = document.createElement("select");
+  motion.addEventListener("change", function () {
+    pendingFlair.motion = motion.value;
+    flairChanged();
+  });
+  flairEls.motion = row("motion", motion);
+
+  flairEls.stars = checkbox("stars", "stars");
+  flairEls.spectrum = checkbox("spectrum — the scene pulses with load", "spectrum", false);
+  flairEls.scanlines = checkbox("CRT scanlines", "scanlines", false);
+
+  var glass = document.createElement("input");
+  glass.type = "range"; glass.min = "0"; glass.max = "100";
+  glass.addEventListener("input", function () {
+    pendingFlair.glass = glass.value / 100;
+    flairChanged(false);
+  });
+  flairEls.glass = row("panel glass", glass);
+
+  refreshFlairUI();
+}
 
 // -- D34 drawer toggle --
 document.getElementById("palette-toggle").addEventListener("click", function () {
