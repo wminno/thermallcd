@@ -1,14 +1,15 @@
 [Unit]
-Description=thermallcd - nvtop monitor on Thermalright Trofeo Vision 9.16" LCD
+Description=thermallcd - dashboard platform on Thermalright Trofeo Vision 9.16" LCD
 After=multi-user.target
 
 [Service]
 Type=simple
 User=@USER@
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 @REPO@/thermallcd/monitor.py
-Restart=on-failure
-RestartSec=3
+ExecStart=/usr/bin/python3 -m thermallcd.supervisor --port 8899 --data @REPO@/data
+WorkingDirectory=@REPO@
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

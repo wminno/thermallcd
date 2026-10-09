@@ -11,8 +11,11 @@ panel; the browser owns the frame clock, Python is transport:
 
 Run: python3 -m thermallcd.capture <url> [--port 9222] [--fps 6] [--seconds N]
 
-This is the spike: no watchdog (T2), no device enumeration (T15), no auth.
-Ctrl+C stops Chromium and releases the panel.
+Watchdog split (T2/D8): the capture self-exits with code 42 when the
+screencast is unrecoverably stuck (no frames at all despite re-arms — a
+broken tab context re-arming cannot fix, or a dead chromium); the
+supervisor (thermallcd.supervisor) restarts it. No device enumeration
+(T15). Ctrl+C stops Chromium and releases the panel.
 """
 
 import argparse
@@ -33,7 +36,13 @@ from . import lcd
 
 CDP_PORT_DEFAULT = 9222
 FPS_DEFAULT = 6.0
-STALE_FRAME_S = 30.0  # spike: warn only (watchdog lands with T2/D8)
+STALE_FRAME_S = 30.0
+# exit code the supervisor reads as "screencast stuck, restart me"
+EXIT_STUCK = 42
+
+
+class StuckScreencastError(RuntimeError):
+    """No frames arrived despite repeated re-arms — restart the pipeline."""
 
 CHROMIUM_BIN_CANDIDATES = (
     "chromium",
@@ -138,6 +147,8 @@ class Screencast:
         self.on_frame = on_frame
         self.min_interval = 1.0 / fps
         self.stale_s = STALE_FRAME_S
+        self.max_stale_rearms = 3  # 3 x stale_s with zero frames = stuck
+        self._stale_streak = 0
         self._last_send = 0.0
         self._last_frame = time.time()
         self._msg_id = 10
@@ -199,11 +210,22 @@ class Screencast:
                 pass
 
     def _stale_check(self, force_reset: bool = False) -> bool:
-        """True exactly when the stale threshold fires (once per window)."""
+        """True exactly when the stale threshold fires (once per window).
+
+        Every firing counts toward the stuck streak: a healthy session
+        produces at least the re-arm's initial frame, so consecutive
+        firings with zero frames mean the tab context is gone — raising
+        beats re-arming forever while the panel starves."""
         if force_reset:
             self._last_frame = time.time()
+            self._stale_streak = 0
             return False
         if time.time() - self._last_frame > self.stale_s:
+            self._stale_streak += 1
+            if self._stale_streak >= self.max_stale_rearms:
+                raise StuckScreencastError(
+                    f"no frames for >{self.max_stale_rearms * self.stale_s:.0f}s "
+                    "despite re-arms — screencast session is unrecoverable")
             print(f"capture: no frame for >{self.stale_s:.0f}s — re-arming "
                   "screencast", file=sys.stderr)
             self._last_frame = time.time()
@@ -271,6 +293,7 @@ def main(argv=None):
         thread.start()
 
         sig = {"stop": False}
+        exit_code = 0
         def _sig(*_):
             sig["stop"] = True
         signal.signal(signal.SIGINT, _sig)
@@ -278,6 +301,13 @@ def main(argv=None):
         t0 = time.time()
         last = 0
         while not sig["stop"] and tick():
+            if not thread.is_alive():
+                # stuck screencast (raises in-thread) or dead chromium: the
+                # supervisor restarts us — the panel must not starve silently
+                print("capture: screencast ended — exiting for restart",
+                      file=sys.stderr)
+                exit_code = EXIT_STUCK
+                break
             n = frames_out["n"]
             if n and n % (args.fps * 10) == 0 and n != last:
                 dt = time.time() - t0
@@ -292,6 +322,8 @@ def main(argv=None):
         if not args.dry_run:
             panel.close()
         print(f"capture: done — {frames_out['n']} frames sent")
+    if exit_code:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
