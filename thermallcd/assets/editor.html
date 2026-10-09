@@ -188,6 +188,21 @@ function nodes() {
   });
 }
 
+// -- live preview: every layout change is pushed into the preview iframe,
+// which repositions its widget frames in place — widgets visibly move as
+// you edit, before any save. The dashboard's own 1 s layout poll stays
+// authoritative for SAVED changes; this only mirrors the editing state.
+var previewFrame = document.querySelector(".canvas iframe");
+var layoutReady = false;
+function pushPreview() {
+  // before the initial layout load the server render already matches the
+  // grid — pushing the empty grid would needlessly drop every frame
+  if (!layoutReady) return;
+  previewFrame.contentWindow.postMessage(
+    { tlcdPreview: { widgets: nodes() } }, location.origin);
+}
+previewFrame.addEventListener("load", pushPreview);  // post-save reload re-pushes
+
 function snapshot() {
   if (loading) return;
   var s = JSON.stringify(nodes());
@@ -197,6 +212,7 @@ function snapshot() {
   if (hist.length > 50) hist.shift();
   ptr = hist.length - 1;
   updateChrome();
+  pushPreview();
 }
 
 function applyHistory(nextPtr) {
@@ -206,6 +222,7 @@ function applyHistory(nextPtr) {
   ptr = nextPtr;
   deselect();
   updateChrome();
+  pushPreview();
 }
 
 function updateChrome() {
@@ -377,6 +394,8 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   snapshot();
   baselinePtr = ptr;
   updateChrome();
+  layoutReady = true;
+  pushPreview();
 });
 
 // -- D34 drawer toggle --

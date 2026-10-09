@@ -553,6 +553,15 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [ ] **T18 (P3, user request 2026-10-09)** — TTY widget: nvtop-style pty pane that spawns an arbitrary process into the tty, command chosen through the widget's selection options
   - Needs: pane spawn contract (command as slot config), security pass on what the token holder may spawn, editor options UI (shares T17's selection-options work)
   - Verify: widget runs e.g. `htop`/custom command in its slot at slot-pixel size, survives resize
+- [ ] **T19 (P3, user request 2026-10-09)** — clock widget: digital and analog variants, with a date display
+  - Needs: manifest view variants (shares T17's options work); analog face on canvas, sized to slot pixels
+  - Verify: both variants keep time through a resize; date legible at small sizes
+- [ ] **T20 (P3, user request 2026-10-09)** — weather widget: current conditions (and optionally a short forecast) for a configured location
+  - Needs: external weather API (key-less preferred, e.g. Open-Meteo), location as widget option, cache/rate-limit courtesy, offline behavior per the stale contract (D23)
+  - Verify: renders current temp/conditions, degrades to stale marker with no network
+- [ ] **T21 (P3, user request 2026-10-09)** — Spotify "now playing" widget: current track/artist/album art via the Spotify account API
+  - Needs: user's own Spotify API key/credentials entered in widget settings (stored per-widget, gitignored), token refresh handling, idle state when nothing plays
+  - Verify: art + track title update while music plays; clean idle state when paused
 
 Effort ratios assumed features ~30x, tests ~50x, bug-fix ~20x human÷CC, adjusted down for small units.
 

@@ -101,6 +101,50 @@
         .catch(function () {});
     }, 1000);
   })();
+
+  // Live editor preview: the editor postMessages its unsaved layout on
+  // every change. Same-id widgets reposition in place — content never
+  // reloads, so widgets visibly glide while you drag. New ids fetch their
+  // frame from /api/frame; ids gone from the layout leave. After a
+  // post-save reload (the poll above) the server markup is already
+  // current, so the editor's re-push is a no-op reposition.
+  function renderPreview(widgets) {
+    var grid = document.querySelector(".grid");
+    var keep = {};
+    widgets.forEach(function (w) {
+      keep[w.id] = true;
+      var col = (w.x + 1) + " / span " + w.w;
+      var row = (w.y + 1) + " / span " + w.h;
+      var f = grid.querySelector('iframe[data-wid="' + w.id + '"]');
+      if (f) {
+        f.style.gridColumn = col;
+        f.style.gridRow = row;
+        return;
+      }
+      fetch("/api/frame?id=" + encodeURIComponent(w.id) +
+            "&token=" + encodeURIComponent(window.TLCD_TOKEN))
+        .then(function (r) { return r.json(); })
+        .then(function (doc) {
+          if (!doc.srcdoc) return;
+          var nf = document.createElement("iframe");
+          nf.className = "widget";
+          nf.setAttribute("data-wid", w.id);
+          nf.style.gridColumn = col;
+          nf.style.gridRow = row;
+          nf.title = doc.title || w.id;
+          nf.srcdoc = doc.srcdoc;
+          grid.appendChild(nf);
+        })
+        .catch(function () {});
+    });
+    grid.querySelectorAll("iframe.widget").forEach(function (f) {
+      if (!keep[f.getAttribute("data-wid")]) f.remove();
+    });
+  }
+  window.addEventListener("message", function (e) {
+    if (e.origin !== location.origin || !e.data || !e.data.tlcdPreview) return;
+    renderPreview(e.data.tlcdPreview.widgets);
+  });
 </script>
 </body>
 </html>

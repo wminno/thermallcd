@@ -152,6 +152,22 @@ class TestAuthMatrix(PlatformTestBase):
         status, _, body = _http(f"{self.base}/api/nvtop", token=self.token.token)
         self.assertEqual(status, 404)
 
+    def test_frame_endpoint_auth_payload_and_404(self):
+        # live editor preview: one widget frame's doc (raw, token injected)
+        status, _, _ = _http(f"{self.base}/api/frame?id=w-good")
+        self.assertEqual(status, 401)
+        status, _, body = _http(f"{self.base}/api/frame?id=w-good",
+                                token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["title"], "GOOD")
+        self.assertIn("window.TLCD_TOKEN", body["srcdoc"])
+        # raw doc, not the srcdoc-escaped form — the preview assigns it as
+        # a property (iframe.srcdoc = doc.srcdoc), so escaping would show tags
+        self.assertNotIn("&lt;", body["srcdoc"])
+        status, _, _ = _http(f"{self.base}/api/frame?id=nope",
+                             token=self.token.token)
+        self.assertEqual(status, 404)
+
 
 class TestRegistry(PlatformTestBase):
     def test_malformed_widget_skipped_with_reason(self):
@@ -180,6 +196,7 @@ class TestRegistry(PlatformTestBase):
         self.assertEqual(body.count("<iframe"), 1)   # w-good's frame only
         self.assertNotIn("w-bad", body)              # malformed: scene shows through
         self.assertIn("srcdoc=", body)               # per-widget iframe (D21)
+        self.assertIn('data-wid="w-good"', body)     # live-preview targeting
 
 
 class TestLayoutStore(PlatformTestBase):

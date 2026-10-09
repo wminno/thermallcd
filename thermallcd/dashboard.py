@@ -179,6 +179,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, data, "image/jpeg")
         if route == "/api/widgets":
             return self._json(200, {"widgets": self.server.registry.scan()})
+        if route == "/api/frame":
+            # live editor preview: one widget frame's doc, so the editor's
+            # preview iframe can add a newly placed widget without a page
+            # reload (the editor pushes its unsaved layout on every change)
+            name = query.get("id", [""])[0]
+            entry = self.server.registry.get(name)
+            if entry is None:
+                return self._json(404, {"error": "not found"})
+            return self._json(200, {
+                "id": name,
+                "title": entry.get("title") or name,
+                "srcdoc": _widget_doc(self.server.registry, name,
+                                      self._token_supplied()),
+            })
         if route == "/api/layout":
             device = query.get("device", ["default"])[0]
             doc = self.server.layout.load(device)
@@ -264,8 +278,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
 
-def _widget_srcdoc(registry, name: str, token: str) -> str:
-    """Widget index.html with the auth token injected, html-escaped for srcdoc."""
+def _widget_doc(registry, name: str, token: str) -> str:
+    """Widget index.html with the auth token injected (raw, JSON-safe)."""
     path = registry.widget_file(name, "index.html")
     doc = path.read_text(encoding="utf-8") if path else (
         "<!doctype html><body><div class='tlcd-title'>%s</div>"
@@ -273,10 +287,13 @@ def _widget_srcdoc(registry, name: str, token: str) -> str:
     inject = f'<script>window.TLCD_TOKEN={json.dumps(token)};</script>'
     if "</head>" in doc.lower():
         idx = doc.lower().index("</head>")
-        doc = doc[:idx] + inject + doc[idx:]
-    else:
-        doc = inject + doc
-    return html.escape(doc, quote=True)
+        return doc[:idx] + inject + doc[idx:]
+    return inject + doc
+
+
+def _widget_srcdoc(registry, name: str, token: str) -> str:
+    """_widget_doc html-escaped for a srcdoc attribute."""
+    return html.escape(_widget_doc(registry, name, token), quote=True)
 
 
 def _render_dashboard(server, slots, srcdocs, token: str) -> str:
@@ -294,7 +311,8 @@ def _render_dashboard(server, slots, srcdocs, token: str) -> str:
         col = f"grid-column: {item['x'] + 1} / span {item['w']};"
         row = f"grid-row: {item['y'] + 1} / span {item['h']};"
         frames.append(
-            f'<iframe class="widget" style="{col} {row}" srcdoc="{srcdoc}" '
+            f'<iframe class="widget" data-wid="{html.escape(item["id"])}" '
+            f'style="{col} {row}" srcdoc="{srcdoc}" '
             f'title="{html.escape(entry.get("title") or item["id"])}"></iframe>')
     template = (ASSETS / "dashboard.html").read_text(encoding="utf-8")
     return (template
