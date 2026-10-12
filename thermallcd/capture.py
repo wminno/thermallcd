@@ -320,6 +320,15 @@ def _write_profile(data_dir, device_id: str, device: dict, info: dict):
         json.dumps(doc), encoding="utf-8")
 
 
+def heartbeat(profile_path: Path):
+    """Refresh the profile file's mtime — /api/devices' liveness signal.
+
+    Called from the stats branch, a few times a minute; a missing file
+    (dry-run, or the write raced us) is not an error."""
+    if profile_path.exists():
+        profile_path.touch()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("url", help="dashboard URL (file:// works for the spike)")
@@ -405,8 +414,8 @@ def main(argv=None):
                 print(f"capture: {n} frames to panel in {dt:.0f}s "
                       f"({n / dt:.1f} FPS, {cast.dropped} dropped)")
                 last = n
-                if not args.dry_run and profile_path.exists():
-                    profile_path.utime(None)  # heartbeat for /api/devices
+                if not args.dry_run:
+                    heartbeat(profile_path)  # mtime = /api/devices liveness
             time.sleep(0.25)
     finally:
         if cast:
