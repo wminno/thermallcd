@@ -1,7 +1,9 @@
 /* thermallcd widget theme contract (D32).
    Tokens come from the design doc's palette (source: synth.html).
    Widgets consume ONLY these custom properties — never hardcode color or font.
-   Any animation keeps cycles <= 0.5 Hz so the ~6 FPS capture samples cleanly (D37). */
+   Motion (D37): nothing cycles faster than the platform tick (--tlcd-tick,
+   ~15 Hz, matching the 15 FPS capture); ambient cycles stay well under it
+   so the panel samples them smoothly. */
 
 :root {
   --tlcd-surface: #0f0b1d;
@@ -9,7 +11,9 @@
   --tlcd-field: #0a0716;
   --tlcd-line: #282043;
   --tlcd-text: #ece7f8;
-  --tlcd-dim: #8f87ae;
+  /* dim clears 4.5:1 over the glass panel at the scene's brightest
+     (sun near-white through 82% glass) — D35, visual pass 2026-10-12 */
+  --tlcd-dim: #a19abc;
   --tlcd-accent: #ff2e83;
   --tlcd-warn: #ffd166;
   --tlcd-font-display: "Audiowide", ui-monospace, monospace;

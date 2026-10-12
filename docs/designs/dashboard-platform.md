@@ -550,7 +550,15 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Editor shows the device selector only when ≥2 devices are known; offline ones disabled (◐ prefix)
   - Verified with fake-enumeration supervisor tests + the real panel re-keyed to its serial (single panel available — hot-plug paths covered by tests only)
   - Verify: two panels → two canvases, selector lists both
-- [ ] **T16 (P3, human: ~2 h / CC: ~20 min)** — visual pass (D33) + docs/widgets.md authoring contract (D30) — widget manifest, resize modes, theme tokens, motion ceiling
+- [x] **T16 (P3, human: ~2 h / CC: ~20 min)** — visual pass (D33) + docs/widgets.md authoring contract (D30) — widget manifest, resize modes, theme tokens, motion ceiling — DONE (2026-10-12)
+  - Surfaced by: Design review D30/D33
+  - Files: docs/widgets.md, widgets/theme.css
+  - docs/widgets.md documents the real contract (registry.py/boot.js/theme.css read against code): manifest fields, grid-unit slot math (150w+8(w−1) × 138h+8(h−1)), iframe isolation + injected token, theme tokens, stale contract, resize modes, image sources, motion budget, a11y, worked example (verified against the live /api/metrics field names)
+  - Visual pass on the live panel via CDP screenshot: 12×3 grid, 8px gutters, hairlines, 6px radius, z-order (scene → glass → scanlines → watermark) all correct; type hierarchy reads at panel scale
+  - D35 fix: --tlcd-dim #8f87ae → #a19abc — the old value fell to 3.62:1 over the sun's near-white through the 82% glass; #a19abc clears 4.5:1 at the scene's brightest (4.58:1 sun, 5.05:1 cyan) with hierarchy intact
+  - theme.css motion comment updated to the amended D37 (15 Hz tick / 15 FPS capture, was 0.5 Hz / 6 FPS)
+  - Editor a11y spot-check: focus-visible styling present, 44px min targets on header buttons and palette items
+  - 1 m legibility walk left to the user's eyes (panel is live; screenshots at /tmp/panel_t16*.png from the session)
   - Surfaced by: Design review D30/D33
   - Files: docs/widgets.md, mock assets
   - Verify: a11y checklist (D35) + 1 m legibility test walked and recorded
