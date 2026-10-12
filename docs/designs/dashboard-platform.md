@@ -535,7 +535,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Design review D29/D36/D37
   - Files: flair assets, synth.html port
   - Verify: D33 visual pass at ~1 m — tier-1/2 values readable over busiest scene frame
-- [ ] **T14 (P2, human: ~2 h / CC: ~20 min)** — burn-in shuffle — equal-size permutation + crossfade + canonical/`shuffled` split (D28); atomic-rename layout writes
+- [x] **T14 (P2, human: ~2 h / CC: ~20 min)** — burn-in shuffle DONE (2026-10-12): the server side was already built (D28 store split, atomic writes, `?shuffled=1` PUT, render-time application); this added the shuffle config (`shuffle.interval_min` in the canonical doc, normalized, default 0 = off), the client engine in dashboard.html (permutes the effective arrangement within equal-size groups via Fisher-Yates, ~0.2 s opacity crossfade — the D22 fade-in fill must be dropped first or it overrides inline opacity — then persists via PUT ?shuffled=1; skipped embedded so the editor canvas keeps canonical), the poll stamp excluding the shuffle state (the page's own writes must not reload it), a canonical save clearing the stale permutation, and the editor SHUFFLE section (interval input riding undo/redo history + a live "last shuffled at HH:MM" note).
   - Surfaced by: Design review D28 (also resolves suppressed concurrent-write finding)
   - Files: dashboard.py, layout store
   - Verify: shuffle never overwrites canonical; editor shows "last shuffled at HH:MM"
@@ -565,9 +565,11 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [ ] **T22 (P3, backup option, user request 2026-10-09)** — pre-rendered flair: render each flair scene/theme/motion combo to a seamlessly self-looping video and use it as the backdrop instead of live canvas rendering
   - Status: backup only — measured live cost is ~1 ms/scene render at the 4 Hz D37 tick with GPU compositing (capture.py `--use-angle=vulkan`, RADV); a looping video would add a continuous decoder + constant capture churn and lose the load-reactive spectrum
   - Trigger to revisit: if a future flair addition (full-motion scenes, richer effects) pushes live render cost past the tick budget, or the GPU path proves unstable on a driver update
-- [ ] **T23 (P3, user request 2026-10-12)** — remove the flair spectrum option: it is extremely heavy/slow in practice and was originally a sound feature (no audio source on this panel); the load-reactive pulse it samples comes from /api/metrics, which other widgets already cover
+- [ ] **T23 (P3, user request 2026-10-12, REVERSED same day)** — ~~remove the flair spectrum option~~ the user reversed this: "this may actually work out, which I didn't expect" — the spectrum stays in; possible tuning later on request. (Original complaint: it is extremely heavy/slow in practice and was originally a sound feature; the load-reactive pulse it samples comes from /api/metrics, which other widgets already cover)
 - [ ] **T24 (P3, user request 2026-10-12)** — user-supplied flair media: upload animated png/gif/mp4 files as the background layer, replacing the built-in scenes (storage under data/, gitignored; mp4 needs the size/fps budget checked against the frame contract; the disable-built-in-flair checkbox from T13 is the natural off switch)
 - [ ] **T25 (P3, widget request, user 2026-10-12)** — memory/swap widget: total/used/available + swap usage from /proc/meminfo, bar or numeric tiers per D18
+- [ ] **T26 (P3, bug report, user 2026-10-12)** — llm-tasks widget never lists anything (SC5 flagged exactly this: no defined data source). Diagnose what it samples and give it a source that actually yields tasks
+- [ ] **T27 (P3, user request 2026-10-12)** — rotate the flair scene on a timer: the scene's static parts (terrain silhouettes, sun) sit at fixed pixels and burn in like widgets do. Model on the source deck's random view (synth.html `rand`/`randsec`/`randpick`: "switch to a fresh random view on a timer", with a picker for what randomizes — scene/theme/motion). Editor setting next to the burn-in shuffle interval; the rotation timer can share the shuffle cadence or run its own
 
 Effort ratios assumed features ~30x, tests ~50x, bug-fix ~20x human÷CC, adjusted down for small units.
 

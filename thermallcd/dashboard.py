@@ -319,11 +319,17 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict) -> str:
             f'<iframe class="widget" data-wid="{html.escape(item["id"])}" '
             f'style="{col} {row}" srcdoc="{srcdoc}" '
             f'title="{html.escape(entry.get("title") or item["id"])}"></iframe>')
+    # the effective arrangement (canonical or the D28 shuffle state): the
+    # shuffle engine permutes from what is actually rendered, not from the
+    # canonical doc the layout API serves
+    placed = [{"id": item["id"], "x": item["x"], "y": item["y"],
+               "w": item["w"], "h": item["h"]} for (item, _e) in slots]
     template = (ASSETS / "dashboard.html").read_text(encoding="utf-8")
     return (template
             .replace("/*__WATERMARK__*/", watermark)
             .replace("/*__FRAMES__*/", "\n".join(frames))
             .replace("__FLAIR__", json.dumps(flair))
+            .replace("__WIDGETS__", json.dumps(placed))
             .replace("__GLASS__", json.dumps(flair.get("glass", 0.82)))
             .replace("__TOKEN__", json.dumps(token)))
 

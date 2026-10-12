@@ -50,6 +50,32 @@ DEFAULT_FLAIR = {
     "enabled": True,
 }
 
+# T14/D28 burn-in shuffle: minutes between widget permutations on the panel;
+# 0 = off. Stored in the canonical doc (the editor sets it), consumed by the
+# dashboard page's shuffle engine.
+DEFAULT_SHUFFLE = {"interval_min": 0}
+
+
+def _normalize_shuffle(shuffle):
+    """Validated copy of the shuffle config, or an error string.
+
+    Mirrors _normalize_flair: unknown keys dropped (forward-compatible),
+    interval coerced to a non-negative int (a bad value should not 400 the
+    whole layout save)."""
+    if shuffle is None:
+        return dict(DEFAULT_SHUFFLE), None
+    if not isinstance(shuffle, dict):
+        return None, "shuffle must be an object"
+    out = dict(DEFAULT_SHUFFLE)
+    for key, value in shuffle.items():
+        if key == "interval_min":
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or value < 0):
+                return None, "shuffle.interval_min must be a number >= 0"
+            out[key] = int(value)
+        # unknown keys: dropped silently
+    return out, None
+
 
 def _normalize_flair(flair):
     """Validated copy of the flair config, or an error string.
@@ -141,6 +167,10 @@ class LayoutStore:
             try:
                 layout = json.loads(path.read_text(encoding="utf-8"))
                 if _validate_layout(layout) is None:
+                    if "shuffle" not in layout:
+                        # pre-T14 docs: serve the off default so every consumer
+                        # (editor settings, dashboard engine) sees the key
+                        layout = {**layout, "shuffle": dict(DEFAULT_SHUFFLE)}
                     return layout
             except (json.JSONDecodeError, OSError):
                 pass
@@ -149,7 +179,9 @@ class LayoutStore:
                 path.rename(self.dir / f"{device}.corrupt-{int(time.time())}.json")
             except OSError:
                 pass
-        return json.loads(json.dumps(DEFAULT_LAYOUT))  # deep copy
+        out = json.loads(json.dumps(DEFAULT_LAYOUT))  # deep copy
+        out["shuffle"] = dict(DEFAULT_SHUFFLE)
+        return out
 
     def save(self, device: str, layout: dict, shuffled: bool = False) -> dict:
         """Write canonical or shuffle state. Returns the saved document."""
@@ -169,7 +201,16 @@ class LayoutStore:
             if err:
                 raise ValueError(err)
             layout = {**layout, "flair": flair}
+        if "shuffle" in layout and layout["shuffle"] is not None:
+            shuffle, err = _normalize_shuffle(layout["shuffle"])
+            if err:
+                raise ValueError(err)
+            layout = {**layout, "shuffle": shuffle}
         _atomic_write(self._canonical(device), layout)
+        # a canonical save may have moved widgets: the stored permutation is
+        # now stale (wrong slots, possible overlaps) — drop it so the panel
+        # reloads canonical and reshuffles from the new arrangement
+        self.clear_shuffle(device)
         return layout
 
     def shuffle_state(self, device: str) -> dict | None:

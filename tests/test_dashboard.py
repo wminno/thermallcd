@@ -197,13 +197,17 @@ class TestRegistry(PlatformTestBase):
         self.assertNotIn("w-bad", body)              # malformed: scene shows through
         self.assertIn("srcdoc=", body)               # per-widget iframe (D21)
         self.assertIn('data-wid="w-good"', body)     # live-preview targeting
+        self.assertIn("TLCD_WIDGETS", body)          # T14: effective arrangement
+                                                     # for the shuffle engine
 
 
 class TestLayoutStore(PlatformTestBase):
     def test_round_trip(self):
         layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
         self.store.save("dev1", layout)
-        self.assertEqual(self.store.load("dev1"), layout)
+        # load fills the T14 shuffle default so every consumer sees the key
+        self.assertEqual(self.store.load("dev1"),
+                         {**layout, "shuffle": {"interval_min": 0}})
 
     def test_rejects_out_of_grid(self):
         bad = {"widgets": [{"id": "x", "x": 11, "y": 0, "w": 4, "h": 1}]}
@@ -215,10 +219,31 @@ class TestLayoutStore(PlatformTestBase):
         self.store.save("dev2", canonical)
         permuted = {"widgets": [{"id": "w-good", "x": 3, "y": 0, "w": 2, "h": 1}]}
         self.store.save("dev2", permuted, shuffled=True)
-        self.assertEqual(self.store.load("dev2"), canonical)      # D28
+        # D28: the shuffle write never touched the canonical arrangement
+        self.assertEqual(self.store.load("dev2"),
+                         {**canonical, "shuffle": {"interval_min": 0}})
         state = self.store.shuffle_state("dev2")
         self.assertTrue(state["shuffled"])
         self.assertEqual(state["widgets"], permuted["widgets"])
+
+    def test_canonical_save_clears_stale_shuffle(self):
+        # T14: after a canonical save the stored permutation may reference
+        # moved widgets — dropped so the panel reshuffles from canonical
+        canonical = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("dev4", canonical)
+        permuted = {"widgets": [{"id": "w-good", "x": 3, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("dev4", permuted, shuffled=True)
+        self.assertIsNotNone(self.store.shuffle_state("dev4"))
+        edited = {"widgets": [{"id": "w-good", "x": 1, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("dev4", edited)
+        self.assertIsNone(self.store.shuffle_state("dev4"))
+
+    def test_shuffle_config_validated(self):
+        base = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        with self.assertRaises(ValueError):
+            self.store.save("dev5", {**base, "shuffle": {"interval_min": -5}})
+        self.store.save("dev5", {**base, "shuffle": {"interval_min": 30}})
+        self.assertEqual(self.store.load("dev5")["shuffle"], {"interval_min": 30})
 
     def test_corrupt_file_falls_back_to_default(self):
         self.store.save("dev3", {"widgets": [
@@ -226,7 +251,8 @@ class TestLayoutStore(PlatformTestBase):
         path = self.store.dir / "dev3.json"
         path.write_text("{not json")                       # simulate corruption
         loaded = self.store.load("dev3")
-        self.assertEqual(loaded, layout_mod.DEFAULT_LAYOUT)
+        self.assertEqual(loaded,
+                         {**layout_mod.DEFAULT_LAYOUT, "shuffle": {"interval_min": 0}})
         self.assertTrue(list(self.store.dir.glob("dev3.corrupt-*")))  # moved aside
 
 

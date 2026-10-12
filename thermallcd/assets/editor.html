@@ -141,6 +141,13 @@
     color: var(--tlcd-text); border: 1px solid var(--tlcd-line);
     border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 6px;
   }
+  /* T14: shuffle interval number input + "last shuffled" note */
+  .flair-row input[type="number"] {
+    flex: 2; min-height: 32px; width: 72px; background: var(--tlcd-field);
+    color: var(--tlcd-text); border: 1px solid var(--tlcd-line);
+    border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 6px;
+  }
+  .shuffle-note { font-size: 11px; color: var(--tlcd-dim); margin: 0 0 8px; }
   .flair-check {
     display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
     font-size: 12px; color: var(--tlcd-text); cursor: pointer;
@@ -221,6 +228,9 @@ function nodes() {
 var previewFrame = document.querySelector(".canvas iframe");
 var layoutReady = false;
 var pendingFlair = null;   // T13: flair rides the same push + save path
+var pendingShuffle = { interval_min: 0 };   // T14/D28 burn-in shuffle config
+var shuffleEls = {};
+var shuffleNote = null;
 function pushPreview() {
   // before the initial layout load the server render already matches the
   // grid — pushing the empty grid would needlessly drop every frame
@@ -236,7 +246,9 @@ setInterval(pushPreview, 2000);
 
 function snapshot() {
   if (loading) return;
-  var s = JSON.stringify(nodes());
+  // the shuffle interval rides the history: interval edits mark the save
+  // dirty and undo/redo reverts them like any layout change
+  var s = JSON.stringify({ widgets: nodes(), shuffle: pendingShuffle.interval_min });
   if (ptr >= 0 && hist[ptr] === s) return;   // dedupe double-fire events
   hist = hist.slice(0, ptr + 1);
   hist.push(s);
@@ -248,7 +260,10 @@ function snapshot() {
 
 function applyHistory(nextPtr) {
   loading = true;
-  grid.load(JSON.parse(hist[nextPtr]));
+  var h = JSON.parse(hist[nextPtr]);
+  grid.load(h.widgets);
+  pendingShuffle.interval_min = h.shuffle;
+  if (shuffleEls.interval) shuffleEls.interval.value = h.shuffle;
   loading = false;
   ptr = nextPtr;
   deselect();
@@ -334,11 +349,15 @@ saveBtn.addEventListener("click", function () {
   fetch("/api/layout?device=default", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ widgets: nodes(), flair: pendingFlair }),
+    body: JSON.stringify({ widgets: nodes(), flair: pendingFlair,
+                           shuffle: pendingShuffle }),
   }).then(function (r) {
     if (!r.ok) throw new Error(r.status);
     baselinePtr = ptr;
     updateChrome();
+    // a canonical save clears the stored permutation (stale positions) —
+    // the note resets until the panel reshuffles
+    refreshShuffleNote(null);
     showToast("Saved — panel updates in ~2 s");
   }).catch(function () { showToast("Save failed — see server logs"); });
 });
@@ -413,6 +432,7 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   return fetch("/api/layout?device=default").then(function (r) { return r.json(); });
 }).then(function (doc) {
   initFlair(doc && doc.flair);
+  initShuffle(doc && doc.shuffle, doc && doc.shuffled);
   if (!doc) return;
   loading = true;
   grid.load(doc.widgets.map(function (it) {
@@ -577,6 +597,59 @@ function initFlair(saved) {
   flairEls.glass = row("panel glass", glass);
 
   refreshFlairUI();
+}
+
+// -- T14/D28 burn-in shuffle settings: the interval rides the canonical
+// layout doc; the note reads the merged shuffle state that the panel page
+// persists every interval (canonical is never touched by shuffles) --
+function refreshShuffleNote(state) {
+  if (!shuffleNote) return;
+  var at = state && state.shuffled_at;
+  shuffleNote.textContent = at
+    ? "last shuffled at " + new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "panel not shuffled yet";
+}
+
+function initShuffle(saved, shuffledState) {
+  if (shuffleEls.interval) return;          // editor tab re-runs only on reload
+  pendingShuffle = { interval_min: (saved && Number(saved.interval_min)) || 0 };
+  var aside = document.getElementById("palette");
+
+  var h2 = document.createElement("h2");
+  h2.textContent = "SHUFFLE";
+  aside.appendChild(h2);
+
+  var input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.value = pendingShuffle.interval_min;
+  input.addEventListener("change", function () {
+    var v = Math.max(0, Math.round(Number(input.value) || 0));
+    input.value = v;
+    pendingShuffle.interval_min = v;
+    snapshot();                             // rides undo/redo + the dirty dot
+  });
+  var wrap = document.createElement("div");
+  wrap.className = "flair-row";
+  var label = document.createElement("label");
+  label.textContent = "burn-in shuffle (min, 0 = off)";
+  wrap.appendChild(label);
+  wrap.appendChild(input);
+  aside.appendChild(wrap);
+  shuffleEls.interval = input;
+
+  shuffleNote = document.createElement("div");
+  shuffleNote.className = "shuffle-note";
+  aside.appendChild(shuffleNote);
+  refreshShuffleNote(shuffledState);
+  // live note: the panel page persists a shuffle every interval
+  setInterval(function () {
+    fetch("/api/layout?device=default")
+      .then(function (r) { return r.json(); })
+      .then(function (doc) { refreshShuffleNote(doc && doc.shuffled); })
+      .catch(function () {});
+  }, 30000);
 }
 
 // -- D34 drawer toggle --
