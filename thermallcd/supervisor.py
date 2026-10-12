@@ -29,6 +29,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .capture import FPS_DEFAULT
 from .dashboard import TokenStore
 
 BACKOFF_S = (2.0, 5.0, 10.0, 20.0, 30.0)
@@ -39,7 +40,7 @@ HEALTH_FAILS_MAX = 3
 
 
 class Supervisor:
-    def __init__(self, data_dir, port=8899, bind="0.0.0.0", fps=6.0,
+    def __init__(self, data_dir, port=8899, bind="0.0.0.0", fps=15.0,
                  cdp_port=9222, check_interval=CHECK_INTERVAL_S,
                  start_timeout=START_TIMEOUT_S, stable_s=STABLE_S,
                  backoff=BACKOFF_S, health_fails_max=HEALTH_FAILS_MAX,
@@ -247,7 +248,7 @@ def main(argv=None):
     ap.add_argument("--data", default=str(Path(__file__).parent.parent / "data"),
                     help="state dir (token); gitignored")
     ap.add_argument("--cdp-port", type=int, default=9222)
-    ap.add_argument("--fps", type=float, default=6.0)
+    ap.add_argument("--fps", type=float, default=FPS_DEFAULT)
     args = ap.parse_args(argv)
     Supervisor(args.data, port=args.port, bind=args.bind,
                cdp_port=args.cdp_port, fps=args.fps).run()

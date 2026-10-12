@@ -89,18 +89,18 @@
     document.getElementById("flair-scene").style.display = "none";
   }
 
-  // D37 motion budget: the platform tick. --tlcd-tick steps at ~7 Hz — just
-  // above the capture's 6 FPS frame clock, so every panel frame carries
-  // fresh pixels — and flair steps one repaint per tick, advancing
+  // D37 motion budget: the platform tick. --tlcd-tick steps at ~15 Hz,
+  // matching the capture's 15 FPS frame clock so every panel frame carries
+  // fresh pixels, and flair steps one repaint per tick, advancing
   // continuously at the deck's cruise speed (flair.js CAM_SPEED). The 0.5 Hz
-  // first cut crawled; a 4 Hz retry stepped in visible jumps. Widgets that
+  // first cut crawled; 4-7 Hz steps still read as skipping. Widgets that
   // later want in on the budget read --tlcd-tick.
   var tlcdTick = 0;
   setInterval(function () {
     tlcdTick++;
     document.documentElement.style.setProperty("--tlcd-tick", tlcdTick);
     if (window.TLCDFlair) window.TLCDFlair.step();
-  }, 140);
+  }, 64);
 
   // D27: a saved layout change is visible on the panel within one second
   (function pollLayout() {

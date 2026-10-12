@@ -6,7 +6,9 @@ panel; the browser owns the frame clock, Python is transport:
   1. spawn chromium --headless=new --remote-debugging-port=PORT --window-size=1920,462
   2. open the dashboard URL (spike: a file:// test page)
   3. CDP Page.startScreencast (JPEG); frames arrive on repaint, ack each one
-  4. throttle to ~6 FPS (firmware rate), re-encode via lcd.encode_jpeg
+  4. throttle to the target rate (15 FPS default — raised from 6 when the
+     flair scene needed smooth motion; the vendor sources pin no cap and
+     the panel kept up), re-encode via lcd.encode_jpeg
      (guarantees baseline 4:2:0 + the <450 KB frame contract), send via lcd.py
 
 Run: python3 -m thermallcd.capture <url> [--port 9222] [--fps 6] [--seconds N]
@@ -35,7 +37,7 @@ import websocket  # websocket-client
 from . import lcd
 
 CDP_PORT_DEFAULT = 9222
-FPS_DEFAULT = 6.0
+FPS_DEFAULT = 15.0
 STALE_FRAME_S = 30.0
 # exit code the supervisor reads as "screencast stuck, restart me"
 EXIT_STUCK = 42
@@ -157,8 +159,9 @@ class Screencast:
         self.stale_s = STALE_FRAME_S
         self.max_stale_rearms = 3  # 3 x stale_s with zero frames = stuck
         self._stale_streak = 0
-        self._last_send = 0.0
         self._last_frame = time.time()
+        self._latest = None          # newest un-sent frame (jpeg bytes)
+        self._latest_lock = threading.Lock()
         self._msg_id = 10
         self._stop = threading.Event()
         self.dropped = 0
@@ -172,6 +175,27 @@ class Screencast:
             "params": {"format": "jpeg", "quality": 85, "everyFrame": False},
         }))
         return msg_id + 1
+
+    def _send_loop(self):
+        """Steady send clock: ship the newest frame every min_interval.
+
+        The screencast produces on page damage in bursts; gating arrivals
+        directly sent ~5 of 15 produced FPS (an arrival right after a send
+        was dropped, then the next clump member was stale). Holding the
+        newest frame and sending on a fixed clock keeps the panel cadence
+        even at the full target rate. The tick grid is absolute — waiting
+        min_interval after each encode let the ~20 ms encode cost stretch
+        the period to ~85 ms (11.5 FPS) and jitter it per frame."""
+        while not self._stop.is_set():
+            next_tick = time.time() + self.min_interval
+            with self._latest_lock:
+                jpeg, self._latest = self._latest, None
+            if jpeg is not None:
+                self.sent += 1
+                self.on_frame(jpeg)
+            delay = next_tick - time.time()
+            if delay > 0:
+                self._stop.wait(delay)
 
     def run(self):
         ws = websocket.create_connection(self.ws_url, timeout=5, enable_multithread=True)
@@ -189,6 +213,8 @@ class Screencast:
         }))
         self._msg_id = self._start(ws, self._msg_id)
         self._last_frame = time.time()
+        sender = threading.Thread(target=self._send_loop, daemon=True)
+        sender.start()
         try:
             while not self._stop.is_set():
                 try:
@@ -213,14 +239,11 @@ class Screencast:
                         "method": "Page.screencastFrameAck",
                         "params": {"sessionId": session},
                     }))
-                    now = time.time()
-                    if now - self._last_send >= self.min_interval:
-                        self._last_send = now
-                        self.sent += 1
-                        jpeg = base64.b64decode(params.get("data", ""))
-                        self.on_frame(jpeg)
-                    else:
-                        self.dropped += 1
+                    jpeg = base64.b64decode(params.get("data", ""))
+                    with self._latest_lock:
+                        if self._latest is not None:
+                            self.dropped += 1   # superseded before it was sent
+                        self._latest = jpeg
                 self._stale_check()
         finally:
             try:

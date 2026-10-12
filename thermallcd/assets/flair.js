@@ -85,12 +85,12 @@ var DEFAULTS = {scene:"sunset", theme:"synthwave", motion:"right",
 
 /* D37: per-tick camera step. The original deck ran camX at 1.7 units/s
    (≈117 px/s at panel width) and the tick keeps that speed: camX advances
-   CAM_SPEED * TICK_S per tick. The tick runs just above the capture's 6 FPS
-   so every panel frame carries fresh pixels — evenly spaced small steps,
-   the smoothest motion the firmware frame rate allows. Earlier cuts failed
-   on both ends: 2 s ticks crawled ~100x slower (frozen), and 4 Hz steps of
-   0.42 units read as teleporting (jarring). */
-var TICK_S = 0.14;         // matches the dashboard's ~7 Hz platform tick
+   CAM_SPEED * TICK_S per tick. The tick matches the capture's 15 FPS frame
+   clock so every panel frame carries fresh pixels — evenly spaced small
+   steps, the smoothest motion the pipeline allows. Earlier cuts failed on
+   both ends: 2 s ticks crawled ~100x slower (frozen), and 4-7 Hz steps
+   still read as skipping. */
+var TICK_S = 0.064;        // matches the dashboard's ~15 Hz platform tick
 var CAM_SPEED = 1.7;       // lateral grid units/s at speed 100 — the deck's rate
 var CAM_Z_SPEED = 0.9;     // forward/backward units/s at speed 100 — deck's rate
 
