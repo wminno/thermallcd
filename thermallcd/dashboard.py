@@ -26,6 +26,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 import urllib.parse
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,9 @@ from . import metrics as metrics_mod
 ASSETS = Path(__file__).parent / "assets"
 TOKEN_COOKIE = "tlcd"
 HTTP_TIMEOUT_S = 30  # PF2: no connection without a timeout
+# a profile file older than this reads as the panel being gone (the capture
+# touches it every ~10 s while it streams — T15)
+ONLINE_WINDOW_S = 30.0
 
 
 def lan_url(port: int) -> str:
@@ -52,6 +56,29 @@ def lan_url(port: int) -> str:
     except OSError:
         pass
     return f"http://{ip}:{port}"
+
+
+def load_profiles(data_dir) -> dict:
+    """Per-device panel profiles, written by the capture at handshake (T15).
+
+    data/profiles/<id>.json carries {id, serial, w, h, pm, sub}; its mtime is
+    the heartbeat (the capture touches it while streaming), so `online` here
+    is "a capture pipeline ran for this panel in the last ONLINE_WINDOW_S".
+    Unknown/missing profiles fall back to the 9.16" default at the callers."""
+    out = {}
+    profiles = Path(data_dir) / "profiles"
+    if not profiles.is_dir():
+        return out
+    for path in sorted(profiles.glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            if not (isinstance(doc.get("id"), str) and doc.get("w") and doc.get("h")):
+                continue
+            doc["online"] = time.time() - path.stat().st_mtime < ONLINE_WINDOW_S
+            out[doc["id"]] = doc
+        except (json.JSONDecodeError, OSError):
+            continue
+    return out
 
 
 class TokenStore:
@@ -181,6 +208,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, data, "image/png")
         if route == "/api/widgets":
             return self._json(200, {"widgets": self.server.registry.scan()})
+        if route == "/api/devices":
+            # T15 device selector: panels the capture pipelines have reported
+            # (profiles dir), online = profile heartbeat inside the window
+            return self._json(200, {"devices": sorted(
+                self.server.profiles().values(),
+                key=lambda d: (not d["online"], d["id"]))})
         if route == "/api/frame":
             # live editor preview: one widget frame's doc, so the editor's
             # preview iframe can add a newly placed widget without a page
@@ -264,8 +297,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dashboard(self, query):
         registry = self.server.registry
-        layout = self.server.layout.load("default")
-        shuffle = self.server.layout.shuffle_state("default")
+        # T15: the capture loads its page with ?device=<panel id>; a browser
+        # without the param still renders the shared default arrangement
+        device = query.get("device", ["default"])[0]
+        layout = self.server.layout.load(device)
+        shuffle = self.server.layout.shuffle_state(device)
         if shuffle:
             layout = {**layout, "widgets": shuffle["widgets"]}
         # D29: synthwave on from first boot — a layout without a flair key
@@ -279,7 +315,9 @@ class Handler(BaseHTTPRequestHandler):
                 continue  # absent/malformed widget: the scene shows through (D22/D25)
             slots.append((item, entry))
             srcdocs.append(_widget_srcdoc(self.server.registry, item["id"], token))
-        page = _render_dashboard(self.server, slots, srcdocs, token, flair)
+        profile = self.server.profiles().get(device) or {}
+        page = _render_dashboard(self.server, slots, srcdocs, token, flair,
+                                 device, profile)
         return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
 
@@ -301,7 +339,8 @@ def _widget_srcdoc(registry, name: str, token: str) -> str:
     return html.escape(_widget_doc(registry, name, token), quote=True)
 
 
-def _render_dashboard(server, slots, srcdocs, token: str, flair: dict) -> str:
+def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
+                      device: str = "default", profile: dict | None = None) -> str:
     url = lan_url(server.port)
     claimed = server.token.claimed()
     # D20: the full token prints on the panel until the first successful
@@ -324,6 +363,9 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict) -> str:
     # canonical doc the layout API serves
     placed = [{"id": item["id"], "x": item["x"], "y": item["y"],
                "w": item["w"], "h": item["h"]} for (item, _e) in slots]
+    # T15: the panel profile sizes the canvas; unknown/absent -> 9.16" default
+    w = int((profile or {}).get("w") or 1920)
+    h = int((profile or {}).get("h") or 462)
     template = (ASSETS / "dashboard.html").read_text(encoding="utf-8")
     return (template
             .replace("/*__WATERMARK__*/", watermark)
@@ -331,19 +373,25 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict) -> str:
             .replace("__FLAIR__", json.dumps(flair))
             .replace("__WIDGETS__", json.dumps(placed))
             .replace("__GLASS__", json.dumps(flair.get("glass", 0.82)))
-            .replace("__TOKEN__", json.dumps(token)))
+            .replace("__TOKEN__", json.dumps(token))
+            .replace("__DEVICE__", json.dumps(device))
+            .replace("__PANEL_W__", str(w))
+            .replace("__PANEL_H__", str(h)))
 
 
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, addr, token: TokenStore, registry, layout, metrics, port: int):
+    def __init__(self, addr, token: TokenStore, registry, layout, metrics, port: int,
+                 data_dir=None):
         self.token = token
         self.registry = registry
         self.layout = layout
         self.metrics = metrics
         self.port = port
+        self.data_dir = Path(data_dir) if data_dir else None
         self._nvtop = None
+        self._profiles = (None, 0.0)   # (cache, loaded-at) — re-read each 5 s
         super().__init__(addr, Handler)
 
     @property
@@ -354,6 +402,18 @@ class DashboardServer(ThreadingHTTPServer):
             from thermallcd import nvtop_pane
             self._nvtop = nvtop_pane.NvtopSource(self.layout)
         return self._nvtop
+
+    def profiles(self) -> dict:
+        """Device profiles with a small cache — /api/devices and the page
+        render hit this per poll; the dir walk must not run per request."""
+        if self.data_dir is None:
+            return {}
+        now = time.monotonic()
+        cache, loaded = self._profiles
+        if now - loaded > 5.0:
+            cache = load_profiles(self.data_dir)
+            self._profiles = (cache, now)
+        return cache
 
     def nvtop_stop(self):
         if self._nvtop is not None:
@@ -381,7 +441,7 @@ def main(argv=None):
     metrics = metrics_mod.MetricsSampler(interval=1.0)
 
     server = DashboardServer((args.bind, args.port), token, registry, store, metrics,
-                             args.port)
+                             args.port, data_dir=data_dir)
     metrics.start()
     print(f"dashboard: http://{args.bind}:{args.port} "
           f"(token in {data_dir / 'token'})")

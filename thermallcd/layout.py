@@ -160,9 +160,16 @@ class LayoutStore:
         return device.replace("/", "_").replace("\\", "_") or "default"
 
     def load(self, device: str) -> dict:
-        """Canonical layout for a device; default on missing/corrupt file."""
+        """Canonical layout for a device; the shared default arrangement when
+        the device has no file of its own (T15) or the file is corrupt."""
         device = self._safe_name(device)
         path = self._canonical(device)
+        if device != "default" and not path.exists():
+            # T15: a device without its own layout renders the shared default
+            # (the single-panel install keeps working; the first editor save
+            # forks it to layouts/<device>.json)
+            device = "default"
+            path = self._canonical(device)
         if path.exists():
             try:
                 layout = json.loads(path.read_text(encoding="utf-8"))
@@ -214,7 +221,16 @@ class LayoutStore:
         return layout
 
     def shuffle_state(self, device: str) -> dict | None:
-        path = self._shuffle(self._safe_name(device))
+        """Current permutation for a device, falling back to the shared
+        default's state when the device renders the default layout (T15)."""
+        device = self._safe_name(device)
+        state = self._shuffle_state(device)
+        if state is None and device != "default":
+            state = self._shuffle_state("default")
+        return state
+
+    def _shuffle_state(self, device: str) -> dict | None:
+        path = self._shuffle(device)
         if not path.exists():
             return None
         try:

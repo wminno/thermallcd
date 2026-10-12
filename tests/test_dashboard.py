@@ -342,5 +342,88 @@ class TestFlairLayout(PlatformTestBase):
               token=self.token.token, body=layout_mod.DEFAULT_LAYOUT)
 
 
+class TestMultiPanel(PlatformTestBase):
+    """T15: per-device layouts with the shared default as fallback."""
+
+    def test_device_without_own_layout_falls_back_to_default(self):
+        loaded = self.store.load("panel-nofile")
+        self.assertEqual(loaded, {**layout_mod.DEFAULT_LAYOUT,
+                                  "shuffle": {"interval_min": 0}})
+
+    def test_first_save_forks_the_device_layout(self):
+        layout = {"widgets": [{"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("fork-dev", layout)
+        self.assertEqual(self.store.load("fork-dev"),
+                         {**layout, "shuffle": {"interval_min": 0}})
+        # the shared default file is untouched by the fork
+        self.assertNotIn(
+            {"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1},
+            self.store.load("default")["widgets"])
+
+    def test_shuffle_state_falls_back_to_default(self):
+        permuted = {"widgets": [{"id": "w-good", "x": 5, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("default", permuted, shuffled=True)
+        try:
+            # a panel rendering the default arrangement inherits its state
+            state = self.store.shuffle_state("panel-x")
+            self.assertTrue(state["shuffled"])
+            # an own state shadows the fallback
+            own = {"widgets": [{"id": "w-good", "x": 6, "y": 0, "w": 2, "h": 1}]}
+            self.store.save("panel-x", own, shuffled=True)
+            self.assertEqual(self.store.shuffle_state("panel-x")["widgets"],
+                             own["widgets"])
+        finally:
+            self.store.clear_shuffle("default")
+            self.store.clear_shuffle("panel-x")
+
+    def test_dashboard_page_carries_device_and_profile_tokens(self):
+        layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("scope-dev", layout)
+        status, _, page = _http(f"{self.base}/?device=scope-dev",
+                                token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertIn('window.TLCD_DEVICE="scope-dev"', page)
+        self.assertIn('data-wid="w-good"', page)
+        # absent profile: the 9.16" default sizes the canvas
+        self.assertIn("width: 1920px", page)
+
+    def test_render_dashboard_uses_profile_dims(self):
+        page = dash._render_dashboard(
+            self.server, [], [], "tok", {}, "d", {"w": 1280, "h": 480})
+        self.assertIn("width: 1280px", page)
+        self.assertIn("height: 480px", page)
+        self.assertIn('width="1280"', page)
+        self.assertIn('window.TLCD_DEVICE="d"', page)
+
+    def test_devices_endpoint_empty_without_profiles(self):
+        # the shared test server has no data dir: no devices reported
+        status, _, body = _http(f"{self.base}/api/devices",
+                                token=self.token.token)
+        self.assertEqual((status, body["devices"]), (200, []))
+        status, _, _ = _http(f"{self.base}/api/devices")
+        self.assertEqual(status, 401)          # token-gated like the rest
+
+
+class TestProfiles(unittest.TestCase):
+    """T15: the capture's profile state files — /api/devices reads them."""
+
+    def test_load_profiles_reads_and_heartbeats(self):
+        import os
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        profiles = Path(tmp.name) / "profiles"
+        profiles.mkdir()
+        (profiles / "p1.json").write_text(json.dumps(
+            {"id": "p1", "serial": "S", "w": 1920, "h": 462, "pm": 65, "sub": 3}))
+        doc = dash.load_profiles(tmp.name)
+        self.assertTrue(doc["p1"]["online"])           # just written
+        os.utime(profiles / "p1.json", (0, 0))         # stale heartbeat
+        self.assertFalse(dash.load_profiles(tmp.name)["p1"]["online"])
+        # malformed state is skipped, not fatal
+        (profiles / "bad.json").write_text("{nope")
+        (profiles / "empty.json").write_text('{"id": "x"}')  # missing w/h
+        self.assertEqual(set(dash.load_profiles(tmp.name)), {"p1"})
+
+
 if __name__ == "__main__":
     unittest.main()

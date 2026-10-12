@@ -11,13 +11,18 @@ panel; the browser owns the frame clock, Python is transport:
      the panel kept up), re-encode via lcd.encode_jpeg
      (guarantees baseline 4:2:0 + the <450 KB frame contract), send via lcd.py
 
-Run: python3 -m thermallcd.capture <url> [--port 9222] [--fps 6] [--seconds N]
+Run: python3 -m thermallcd.capture <url> [--device ID] [--port 9222] [--fps 6]
+     [--seconds N]
 
 Watchdog split (T2/D8): the capture self-exits with code 42 when the
 screencast is unrecoverably stuck (no frames at all despite re-arms — a
 broken tab context re-arming cannot fix, or a dead chromium); the
-supervisor (thermallcd.supervisor) restarts it. No device enumeration
-(T15). Ctrl+C stops Chromium and releases the panel.
+supervisor (thermallcd.supervisor) restarts it. T15: --device picks the
+panel (id from lcd.enumerate_devices — one capture per panel, each
+supervised independently); the handshake resolves the profile before
+chromium is sized, and the profile is written to <data>/profiles/<id>.json
+(its mtime is the heartbeat /api/devices reads). Ctrl+C stops Chromium
+and releases the panel.
 """
 
 import argparse
@@ -31,6 +36,7 @@ import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 import websocket  # websocket-client
 
@@ -77,11 +83,13 @@ class Chromium:
     """Resident headless chromium exposing one CDP endpoint."""
 
     def __init__(self, url: str, port: int = CDP_PORT_DEFAULT, width: int = lcd.WIDTH,
-                 height: int = lcd.HEIGHT):
+                 height: int = lcd.HEIGHT, user_data_dir: str | None = None):
         self.url = url
         self.port = port
         self.width = width
         self.height = height
+        self.user_data_dir = user_data_dir or os.path.expanduser(
+            "~/.cache/thermallcd-capture-profile")
         self.proc = None
 
     def start(self):
@@ -104,10 +112,10 @@ class Chromium:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--hide-scrollbars",
-                # snap chromium (strict confinement) can only write under $HOME
-                "--user-data-dir=" + os.path.expanduser(
-                    "~/.cache/thermallcd-capture-profile"
-                ),
+                # snap chromium (strict confinement) can only write under $HOME;
+                # per-panel dirs (T15) — two headless instances sharing one
+                # profile dir would fight over the SingletonLock
+                "--user-data-dir=" + self.user_data_dir,
                 self.url,
             ],
             stdout=subprocess.DEVNULL,
@@ -278,37 +286,81 @@ class Screencast:
         self._stop.set()
 
 
-def to_panel_frame(jpeg: bytes, max_bytes: int = lcd.MAX_FRAME_BYTES) -> bytes:
+def to_panel_frame(jpeg: bytes, size=(lcd.WIDTH, lcd.HEIGHT),
+                   max_bytes: int = lcd.MAX_FRAME_BYTES) -> bytes:
     """Re-encode a screencast JPEG into the firmware contract.
 
-    lcd.encode_jpeg guarantees baseline 4:2:0 at 1920x462; quality walks down
-    until the frame fits under max_bytes.
+    lcd.encode_jpeg guarantees baseline 4:2:0 at the panel's profile (T15 —
+    1920x462 on the 9.16"); quality walks down until the frame fits under
+    max_bytes.
     """
     from PIL import Image
 
     image = Image.open(io.BytesIO(jpeg))
     for quality in (85, 80, 75, 70, 60, 50, 40, 30):
-        out = lcd.encode_jpeg(image, quality=quality)
+        out = lcd.encode_jpeg(image, quality=quality, size=size)
         if len(out) < max_bytes:
             return out
     raise lcd.TrofeoError("frame cannot fit under the firmware size cap")
 
 
+def _write_profile(data_dir, device_id: str, device: dict, info: dict):
+    """Panel profile state (T15): the dashboard and editor read these — the
+    file's mtime doubles as the heartbeat /api/devices reports."""
+    profiles = Path(data_dir) / "profiles"
+    profiles.mkdir(parents=True, exist_ok=True)
+    w, h = info["profile"]
+    doc = {
+        "id": device_id,
+        "serial": device.get("serial"),
+        "w": w, "h": h,
+        "pm": info["pm"], "sub": info["sub"],
+    }
+    (profiles / f"{device_id}.json").write_text(
+        json.dumps(doc), encoding="utf-8")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("url", help="dashboard URL (file:// works for the spike)")
+    ap.add_argument("--device", default="default",
+                    help="panel id from lcd.enumerate_devices (T15)")
     ap.add_argument("--port", type=int, default=CDP_PORT_DEFAULT, help="CDP port")
     ap.add_argument("--fps", type=float, default=FPS_DEFAULT)
     ap.add_argument("--seconds", type=float, default=0, help="stop after N s (0 = run)")
+    ap.add_argument("--data", default=str(Path(__file__).parent.parent / "data"),
+                    help="state dir (profiles/); gitignored")
     ap.add_argument("--dry-run", action="store_true", help="skip the panel (no USB)")
     args = ap.parse_args(argv)
 
     panel = lcd.TrofeoLCD(debug=True)
-    chromium = Chromium(args.url, port=args.port)
     frames_out = {"n": 0}
+    size = (lcd.WIDTH, lcd.HEIGHT)
+
+    device = None
+    if not args.dry_run:
+        # T15: open exactly the panel this pipeline owns. A missing device is
+        # not a stuck screencast — exit 1 and let the supervisor's resync
+        # (hot-plug poll) decide when to try again.
+        device = next(
+            (d for d in lcd.enumerate_devices() if d["id"] == args.device), None)
+        if device is None:
+            print(f"capture: device {args.device!r} not present", file=sys.stderr)
+            sys.exit(1)
+        panel.open(device)
+        info = panel.init()
+        print(f"capture: panel {args.device} opened "
+              f"(pm={info['pm']} sub={info['sub']})")
+        size = info["profile"]
+        _write_profile(args.data, args.device, device, info)
+
+    chromium = Chromium(args.url, port=args.port, width=size[0], height=size[1],
+                        user_data_dir=os.path.expanduser(
+                            "~/.cache/thermallcd-capture-" + args.device))
+    profile_path = Path(args.data) / "profiles" / f"{args.device}.json"
 
     def on_frame(jpeg: bytes):
-        frame = to_panel_frame(jpeg)
+        frame = to_panel_frame(jpeg, size=size)
         if args.dry_run:
             frames_out["n"] += 1
             return
@@ -324,12 +376,8 @@ def main(argv=None):
         return True
 
     chromium.start()
-    print(f"capture: chromium up on :{args.port} -> {args.url}")
+    print(f"capture: chromium up on :{args.port} ({size[0]}x{size[1]}) -> {args.url}")
     try:
-        if not args.dry_run:
-            panel.open()
-            info = panel.init()
-            print(f"capture: panel opened (pm={info['pm']} sub={info['sub']})")
         cast = Screencast(chromium.page_ws_url(), on_frame, fps=args.fps,
                           width=chromium.width, height=chromium.height)
         thread = threading.Thread(target=cast.run, daemon=True)
@@ -357,6 +405,8 @@ def main(argv=None):
                 print(f"capture: {n} frames to panel in {dt:.0f}s "
                       f"({n / dt:.1f} FPS, {cast.dropped} dropped)")
                 last = n
+                if not args.dry_run and profile_path.exists():
+                    profile_path.utime(None)  # heartbeat for /api/devices
             time.sleep(0.25)
     finally:
         if cast:

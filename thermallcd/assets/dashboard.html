@@ -6,8 +6,9 @@
 <script>window.TLCD_TOKEN=__TOKEN__;</script>
 <script>window.TLCD_FLAIR=__FLAIR__;</script>
 <script>window.TLCD_WIDGETS=__WIDGETS__;</script>
+<script>window.TLCD_DEVICE=__DEVICE__;</script>
 <style>
-  html, body { margin: 0; width: 1920px; height: 462px; overflow: hidden; }
+  html, body { margin: 0; width: __PANEL_W__px; height: __PANEL_H__px; overflow: hidden; }
   :root { --tlcd-glass: __GLASS__; }   /* widget glass, editor slider (flair) */
   body {
     /* boot fallback only — the flair canvas (z 1) paints the scene over it
@@ -22,7 +23,7 @@
      platform tick — see the script block (D37 motion budget) */
   #flair-scene {
     position: absolute; left: 0; top: 0; z-index: 1;
-    width: 1920px; height: 462px;
+    width: __PANEL_W__px; height: __PANEL_H__px;
   }
   /* scanline overlay (z 3): uncapped by decision D36, tuned by eye at the visual pass */
   .scanlines {
@@ -71,7 +72,7 @@
 </style>
 </head>
 <body>
-  <canvas id="flair-scene" width="1920" height="462"></canvas>
+  <canvas id="flair-scene" width="__PANEL_W__" height="__PANEL_H__"></canvas>
   <div class="grid">
     /*__FRAMES__*/
   </div>
@@ -170,9 +171,10 @@
       });
       cur = next;
       // persist the arrangement: the next boot renders it server-side, and
-      // the editor's "last shuffled" note reads the stored timestamp
-      fetch("/api/layout?device=default&shuffled=1&token=" +
-            encodeURIComponent(window.TLCD_TOKEN), {
+      // the editor's "last shuffled" note reads the stored timestamp.
+      // Device-scoped (T15): the shuffle belongs to THIS panel.
+      fetch("/api/layout?device=" + encodeURIComponent(window.TLCD_DEVICE) +
+            "&shuffled=1&token=" + encodeURIComponent(window.TLCD_TOKEN), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ widgets: next }),
@@ -195,7 +197,8 @@
   (function pollLayout() {
     var etag = "";
     setInterval(function () {
-      fetch("/api/layout?device=default&token=" + encodeURIComponent(window.TLCD_TOKEN))
+      fetch("/api/layout?device=" + encodeURIComponent(window.TLCD_DEVICE) +
+            "&token=" + encodeURIComponent(window.TLCD_TOKEN))
         .then(function (r) { return r.json(); })
         .then(function (doc) {
           if (window.bootShuffle) window.bootShuffle(doc);

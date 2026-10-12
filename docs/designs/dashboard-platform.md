@@ -539,9 +539,16 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Design review D28 (also resolves suppressed concurrent-write finding)
   - Files: dashboard.py, layout store
   - Verify: shuffle never overwrites canonical; editor shows "last shuffled at HH:MM"
-- [ ] **T15 (P3, human: ~3 h / CC: ~30 min)** — device registry + multi-panel — per-device profile at handshake, `layouts/<serial>.json`, one pipeline per device, editor device selector when N>1
+- [x] **T15 (P3, human: ~3 h / CC: ~30 min)** — device registry + multi-panel — per-device profile at handshake, `layouts/<serial>.json`, one pipeline per device, editor device selector when N>1 — DONE (2026-10-12)
   - Surfaced by: Multi-panel agreement (2026-10-08)
-  - Files: capture.py, dashboard.py, editor assets
+  - Files: lcd.py, capture.py, dashboard.py, layout.py, supervisor.py, assets/dashboard.html, assets/editor.html, tests/test_lcd.py, test_supervisor.py, test_dashboard.py
+  - Device identity = USB iSerial, else `bus{bus}.addr{address}`; sanitized to a filename component with "default" reserved (`default_panel` suffix on collision) — `lcd._device_id()`
+  - Profile rides the handshake: `PANEL_PROFILES` keyed by PM byte (65 → 1920x462); the vendor FBL table isn't in the reference copy, so unknown PM falls back to the 9.16" family profile
+  - One pipeline per device in the supervisor (own headless Chromium, own CDP port from 9222, own process group); USB re-enumerated every tick — hot-plug spawns, unplug stops, dead captures restart on a per-device non-blocking backoff ladder (a slow device never blocks the others)
+  - Liveness = `data/profiles/<id>.json` mtime (capture touches it every ~10 s; online = within 30 s); `/api/devices` lists panels sorted offline-last
+  - Layout fallback: a device without its own file renders `default.json` (shared); the first editor save forks to `<device>.json`; shuffle state falls back to default's too. Page tokens `__DEVICE__`/`__PANEL_W__`/`__PANEL_H__` scope JS fetches, canvas and CSS to the profile
+  - Editor shows the device selector only when ≥2 devices are known; offline ones disabled (◐ prefix)
+  - Verified with fake-enumeration supervisor tests + the real panel re-keyed to its serial (single panel available — hot-plug paths covered by tests only)
   - Verify: two panels → two canvases, selector lists both
 - [ ] **T16 (P3, human: ~2 h / CC: ~20 min)** — visual pass (D33) + docs/widgets.md authoring contract (D30) — widget manifest, resize modes, theme tokens, motion ceiling
   - Surfaced by: Design review D30/D33

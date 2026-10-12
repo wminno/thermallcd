@@ -46,17 +46,74 @@ JPEG_SUBSAMPLING = "4:2:0"
 ACK_TIMEOUT_MS = 1000
 WRITE_TIMEOUT_MS = 5000
 
+# T15 device profiles: the handshake's PM byte (product mode) resolves the
+# panel's pixel size through the vendor FBL table. The authoritative table
+# (trcc-linux bulk_profile) is not in the reference copy — entries below come
+# from real panels; an unknown PM falls back to the 9.16" profile so an
+# unidentified panel still renders the family default.
+PANEL_PROFILES = {
+    65: (1920, 462),   # pmSub 3/5: Trofeo Vision 9.16" (A1LD7)
+}
+DEFAULT_PROFILE = (1920, 462)
+
+
+def resolve_profile(pm: int, sub: int) -> tuple[int, int]:
+    """Pixel (width, height) for a handshake PM/SUB pair."""
+    return PANEL_PROFILES.get(pm, DEFAULT_PROFILE)
+
+
+def _device_id(serial: str | None, bus: int, address: int) -> str:
+    """Stable per-panel identity: USB iSerial, else the bus/address path.
+
+    Doubles as the layouts/<id>.json key — keep it a safe filename
+    component ("default" is the shared fallback layout's own key)."""
+    raw = serial or f"bus{bus}.addr{address}"
+    cleaned = "".join(
+        c if c.isalnum() or c in "._-" else "_" for c in raw).strip(".") or "default"
+    if cleaned.lower() == "default":
+        cleaned += "_panel"   # reserved: the shared fallback layout's key
+    return cleaned
+
+
+def enumerate_devices() -> list[dict]:
+    """All connected panels, for per-device pipelines (T15).
+
+    Returns dicts of {id, serial, bus, address}; the capture opens a specific
+    one by bus/address (unambiguous within a session). A read error degrades
+    to an empty list — the caller keeps running with what it has."""
+    try:
+        found = usb.core.find(idVendor=VID, idProduct=PID, find_all=True)
+    except (usb.core.USBError, ValueError):
+        return []
+    out = []
+    for dev in found:
+        serial = None
+        try:
+            if dev.iSerialNumber:
+                serial = usb.util.get_string(dev, dev.iSerialNumber)
+        except (usb.core.USBError, ValueError):
+            pass  # descriptor unreadable — the bus path still identifies it
+        out.append({
+            "id": _device_id(serial, dev.bus, dev.address),
+            "serial": serial,
+            "bus": dev.bus,
+            "address": dev.address,
+        })
+    return out
+
 
 class TrofeoError(RuntimeError):
     pass
 
 
-def encode_jpeg(image, quality=JPEG_QUALITY):
-    """Encode a PIL image to a protocol-compatible JPEG (baseline, 4:2:0)."""
+def encode_jpeg(image, quality=JPEG_QUALITY, size=(WIDTH, HEIGHT)):
+    """Encode a PIL image to a protocol-compatible JPEG (baseline, 4:2:0).
+
+    `size` is the target panel profile (T15) — the encode resizes to it."""
     import io
 
-    if image.size != (WIDTH, HEIGHT):
-        image = image.resize((WIDTH, HEIGHT))
+    if image.size != tuple(size):
+        image = image.resize(tuple(size))
     if image.mode != "RGB":
         image = image.convert("RGB")
     buf = io.BytesIO()
@@ -79,10 +136,16 @@ class TrofeoLCD:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def open(self):
+    def open(self, device: dict | None = None):
+        """Claim the panel. `device` is one of enumerate_devices()' dicts —
+        open THAT panel by bus/address (T15); None opens the first found."""
         if self.dev is not None:
             return
-        dev = usb.core.find(idVendor=VID, idProduct=PID)
+        kwargs = {"idVendor": VID, "idProduct": PID}
+        if device is not None:
+            kwargs["bus"] = device["bus"]
+            kwargs["address"] = device["address"]
+        dev = usb.core.find(**kwargs)
         if dev is None:
             raise TrofeoError("LCD not found (0416:5408). Is the panel plugged in?")
         try:
@@ -141,6 +204,9 @@ class TrofeoLCD:
             "pm": 64 + raw_pm,
             "sub": (resp[22] if len(resp) > 22 else 0) + 1,
         }
+        # T15: the profile rides the handshake — the capture sizes its
+        # chromium + screencast from it before the page ever loads
+        info["profile"] = resolve_profile(info["pm"], info["sub"])
         if self.debug:
             print(f"init ok: {info}")
         return info

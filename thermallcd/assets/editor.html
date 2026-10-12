@@ -169,6 +169,8 @@
 <header>
   <button id="palette-toggle" class="btn" aria-label="toggle palette">☰</button>
   <h1>THERMALLCD · EDITOR</h1>
+  <select id="device-select" class="btn" hidden
+          aria-label="panel being edited"></select>
   <button id="undo" class="btn" disabled>UNDO</button>
   <button id="redo" class="btn" disabled>REDO</button>
   <button id="save" class="btn">SAVE<span class="dot"></span></button>
@@ -221,11 +223,23 @@ function nodes() {
   });
 }
 
+// -- T15 device scope: which panel this editor edits. Every layout
+// fetch/save and the live preview iframe ride it; the selector (below)
+// appears only when more than one panel reports online.
+var DEVICE = new URLSearchParams(location.search).get("device") || "default";
+function layoutUrl(shuffled) {
+  return "/api/layout?device=" + encodeURIComponent(DEVICE) +
+         (shuffled ? "&shuffled=1" : "");
+}
+
 // -- live preview: every layout change is pushed into the preview iframe,
 // which repositions its widget frames in place — widgets visibly move as
 // you edit, before any save. The dashboard's own 1 s layout poll stays
 // authoritative for SAVED changes; this only mirrors the editing state.
 var previewFrame = document.querySelector(".canvas iframe");
+if (DEVICE !== "default") {
+  previewFrame.src = "/?device=" + encodeURIComponent(DEVICE);
+}
 var layoutReady = false;
 var pendingFlair = null;   // T13: flair rides the same push + save path
 var pendingShuffle = { interval_min: 0 };   // T14/D28 burn-in shuffle config
@@ -346,7 +360,7 @@ function showToast(msg) {
   setTimeout(function () { toast.classList.remove("show"); }, 2500);
 }
 saveBtn.addEventListener("click", function () {
-  fetch("/api/layout?device=default", {
+  fetch(layoutUrl(), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ widgets: nodes(), flair: pendingFlair,
@@ -429,7 +443,7 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     }));
 
   // layout loads only after the registry is known, so chips resolve titles
-  return fetch("/api/layout?device=default").then(function (r) { return r.json(); });
+  return fetch(layoutUrl()).then(function (r) { return r.json(); });
 }).then(function (doc) {
   initFlair(doc && doc.flair);
   initShuffle(doc && doc.shuffle, doc && doc.shuffled);
@@ -645,12 +659,48 @@ function initShuffle(saved, shuffledState) {
   refreshShuffleNote(shuffledState);
   // live note: the panel page persists a shuffle every interval
   setInterval(function () {
-    fetch("/api/layout?device=default")
+    fetch(layoutUrl())
       .then(function (r) { return r.json(); })
       .then(function (doc) { refreshShuffleNote(doc && doc.shuffled); })
       .catch(function () {});
   }, 30000);
 }
+
+// -- T15 device selector: hidden with one panel (nothing changes), shown
+// when more than one reports online; switching re-loads the editor scoped
+// to the chosen panel. Offline panels stay listed but disabled.
+(function () {
+  var sel = document.getElementById("device-select");
+  function refresh() {
+    fetch("/api/devices")
+      .then(function (r) { return r.json(); })
+      .then(function (doc) {
+        var devices = (doc && doc.devices) || [];
+        if (devices.length < 2) { sel.hidden = true; return; }
+        var keep = sel.value;
+        sel.textContent = "";
+        devices.forEach(function (d) {
+          var opt = document.createElement("option");
+          opt.value = d.id;
+          opt.textContent = (d.online ? "" : "◯ ") + d.id +
+                            "  " + d.w + "x" + d.h;
+          opt.disabled = !d.online;
+          if (d.id === (keep || DEVICE)) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.hidden = false;
+      })
+      .catch(function () {});
+  }
+  sel.addEventListener("change", function () {
+    if (!sel.value || sel.value === DEVICE) return;
+    var qs = new URLSearchParams(location.search);
+    qs.set("device", sel.value);
+    location.search = qs.toString();
+  });
+  refresh();
+  setInterval(refresh, 5000);
+})();
 
 // -- D34 drawer toggle --
 document.getElementById("palette-toggle").addEventListener("click", function () {
