@@ -112,6 +112,14 @@ class Chromium:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--hide-scrollbars",
+                # the panel page is fully local, but snap chromium's background
+                # services still resolve Google hosts from boot (Safe Browsing,
+                # component updater, GCM push) — a dashboard appliance sends no
+                # DNS. Each capture restart re-runs that bootstrap.
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-sync",
+                "--disable-domain-reliability",
                 # snap chromium (strict confinement) can only write under $HOME;
                 # per-panel dirs (T15) — two headless instances sharing one
                 # profile dir would fight over the SingletonLock
