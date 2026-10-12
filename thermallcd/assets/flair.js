@@ -467,23 +467,30 @@ function drawTerrain(T, th, hor){
 
 /* ============ spectrum: the scene pulses with your server ============
    Not audio — /api/metrics drives the bands (cpu + gpu load). Bars slew
-   toward their target each tick (fast rise, slow fall) so 0.5 Hz sampling
-   reads as a smooth swell, never a pulse (D37). */
+   toward their target each tick (fast rise, slow fall) so sampling reads
+   as a smooth swell, never a pulse (D37). The per-band/wave wander
+   re-seeds every 2 s; consecutive seeds CROSSFADE over the window so the
+   morph is continuous — a hard re-seed read as the whole spectrum
+   re-initializing (user report 2026-10-12). */
 
 const SPEC_N = 48;
 const specBands = new Float32Array(SPEC_N);
 const specWave = new Float32Array(2048);
-let loadLevel = 0;          // 0..1, from the last metrics poll
+let loadLevel = 0;          // 0..1, slewed toward the polled value
+let loadTarget = 0;
+let lastPoll = -1;
 
 function pollMetrics(){
   if (typeof window.TLCD_TOKEN !== "string") return;
+  if (clock - lastPoll < 1) return;   // the snapshot advances 1/s; a 15 Hz
+  lastPoll = clock;                   // poll just burns the server
   fetch("/api/metrics?token=" + encodeURIComponent(window.TLCD_TOKEN))
     .then(function (r){ return r.json(); })
     .then(function (doc){
       const d = doc.data || {};
       const cpu = (typeof d.cpu === "number") ? d.cpu / 100 : 0;
       const gpu = (d.gpu && typeof d.gpu.busy === "number") ? d.gpu.busy / 100 : 0;
-      loadLevel = Math.max(cpu, gpu);
+      loadTarget = Math.max(cpu, gpu);
     })
     .catch(function (){});
 }
@@ -494,20 +501,26 @@ function specCompute(t){
     for (let i = 0; i < specWave.length; i++) specWave[i] *= .88;
     return;
   }
+  loadLevel += (loadTarget - loadLevel) * .06;   // slew the load input too
   const lvl = .08 + .92 * loadLevel;      // small idle floor: alive at rest
+  const s = Math.floor(t / 2), frac = t / 2 - s;
+  const mix = frac * frac * (3 - 2 * frac);          // smoothstep
   for (let i = 0; i < SPEC_N; i++){
     const f = i / SPEC_N;
-    // bass-weighted tilt + per-band wander that steps on the tick clock
-    const target = Math.pow(1 - f, 1.7) * lvl *
-                   (.75 + .5 * hash(i * 7.31 + Math.floor(t / 2) * 13.7));
+    // bass-weighted tilt + per-band wander, crossfaded between seeds
+    const w = hash(i * 7.31 + s * 13.7) * (1 - mix) +
+              hash(i * 7.31 + (s + 1) * 13.7) * mix;
+    const target = Math.pow(1 - f, 1.7) * lvl * (.75 + .5 * w);
     const cur = specBands[i];
     specBands[i] = cur + (target - cur) * (target > cur ? .65 : .35);
   }
   const env = .25 + .75 * lvl;
   for (let i = 0; i < specWave.length; i++){
+    const w = hash(i * 3.71 + s * 24) * (1 - mix) +
+              hash(i * 3.71 + (s + 1) * 24) * mix;
     const v = Math.sin(i * .021 + t * 1.3) * .35 +
               Math.sin(i * .093 - t * 3.1) * .22 +
-              (hash(i * 3.71 + Math.floor(t / 2) * 24) - .5) * .9;
+              (w - .5) * .9;
     specWave[i] = Math.max(-1, Math.min(1, v * env));
   }
 }
