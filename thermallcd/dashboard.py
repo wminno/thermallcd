@@ -374,6 +374,9 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
             .replace("__WIDGETS__", json.dumps(placed))
             .replace("__GLASS__", json.dumps(flair.get("glass", 0.82)))
             .replace("__TOKEN__", json.dumps(token))
+            # __TOKEN__ is JSON-quoted for JS context; __TOKEN_URL__ is the
+            # raw value for attribute context (guarded subresource URLs)
+            .replace("__TOKEN_URL__", urllib.parse.quote(token, safe=""))
             .replace("__DEVICE__", json.dumps(device))
             .replace("__PANEL_W__", str(w))
             .replace("__PANEL_H__", str(h)))

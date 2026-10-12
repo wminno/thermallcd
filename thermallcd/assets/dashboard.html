@@ -78,7 +78,10 @@
   </div>
   <div class="scanlines"></div>
   <div class="watermark">/*__WATERMARK__*/</div>
-<script src="/assets/flair.js"></script>
+<!-- subresources never inherit the page's ?token= and /assets/ is guarded,
+     so flair.js must carry the token itself (see the boot fallback below:
+     a failed flair.js leaves the boot gradient on the panel) -->
+<script src="/assets/flair.js?token=__TOKEN_URL__"></script>
 <script>
   // boot: honor saved-flair toggles before first paint — scanlines off
   // hides the overlay; the scene disabled leaves #flair-scene unmounted

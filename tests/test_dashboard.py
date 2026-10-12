@@ -395,6 +395,13 @@ class TestMultiPanel(PlatformTestBase):
         self.assertIn('width="1280"', page)
         self.assertIn('window.TLCD_DEVICE="d"', page)
 
+    def test_render_dashboard_tokenizes_flair_src(self):
+        # flair.js is a guarded subresource: subresources never inherit the
+        # page's ?token=, so the src must carry the token itself
+        page = dash._render_dashboard(self.server, [], [], "tok", {}, "d")
+        self.assertIn('src="/assets/flair.js?token=tok"', page)
+        self.assertNotIn("__TOKEN_URL__", page)
+
     def test_devices_endpoint_empty_without_profiles(self):
         # the shared test server has no data dir: no devices reported
         status, _, body = _http(f"{self.base}/api/devices",
