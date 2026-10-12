@@ -42,10 +42,12 @@ DEFAULT_FLAIR = {
     "theme": "synthwave",
     "motion": "right",
     "glass": 0.82,
+    "speed": 25,
     "spectrum": True,
     "stars": True,
     "road": False,
     "scanlines": True,
+    "enabled": True,
 }
 
 
@@ -53,7 +55,7 @@ def _normalize_flair(flair):
     """Validated copy of the flair config, or an error string.
 
     Unknown keys are dropped (forward-compatible), glass is clamped to 0..1
-    (a slider jitter should not 400), booleans are coerced."""
+    (a slider jitter should not 400), speed to 0..100, booleans are coerced."""
     if not isinstance(flair, dict):
         return None, "flair must be an object"
     out = dict(DEFAULT_FLAIR)
@@ -68,7 +70,11 @@ def _normalize_flair(flair):
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 return None, "flair.glass must be a number"
             out[key] = round(max(0.0, min(1.0, float(value))), 3)
-        elif key in ("spectrum", "stars", "road", "scanlines"):
+        elif key == "speed":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return None, "flair.speed must be a number"
+            out[key] = round(max(0.0, min(100.0, float(value))), 1)
+        elif key in ("spectrum", "stars", "road", "scanlines", "enabled"):
             out[key] = bool(value)
         # unknown keys: dropped silently
     return out, None

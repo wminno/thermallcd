@@ -80,15 +80,19 @@ var SCENES = {
 var MOTION_LABELS = {left:"Drift left", right:"Drift right",
                      forward:"Drive forward", backward:"Roll backward", none:"Still"};
 var DEFAULTS = {scene:"sunset", theme:"synthwave", motion:"right",
-                glass:.82, spectrum:true, stars:true, road:false,
-                scanlines:true};
+                glass:.82, speed:25, spectrum:true, stars:true, road:false,
+                scanlines:true, enabled:true};
 
-/* D37: per-tick camera step. The original deck ran camX at v*1.7 units/s
-   (≈117 px/s at panel width); the budget port steps a fraction of that so a
-   2 s tick moves the world a few pixels — drift reads as a slow crawl, and
-   6 FPS sampling never sees a jump. */
-var TICK_S = 2.0;          // matches the dashboard's 0.5 Hz platform tick
-var CAM_STEP = 0.12;       // grid units per tick at full speed
+/* D37: per-tick camera step. The original deck ran camX at 1.7 units/s
+   (≈117 px/s at panel width) and the tick keeps that speed: camX advances
+   CAM_SPEED * TICK_S per tick. The tick runs just above the capture's 6 FPS
+   so every panel frame carries fresh pixels — evenly spaced small steps,
+   the smoothest motion the firmware frame rate allows. Earlier cuts failed
+   on both ends: 2 s ticks crawled ~100x slower (frozen), and 4 Hz steps of
+   0.42 units read as teleporting (jarring). */
+var TICK_S = 0.14;         // matches the dashboard's ~7 Hz platform tick
+var CAM_SPEED = 1.7;       // lateral grid units/s at speed 100 — the deck's rate
+var CAM_Z_SPEED = 0.9;     // forward/backward units/s at speed 100 — deck's rate
 
 /* ============ helpers (verbatim) ============ */
 
@@ -571,6 +575,7 @@ function motionLegal(scene, motion){
 /* ============ render frame (upstream layer order) ============ */
 
 function render(){
+  if (!ctx) return;                   // unmounted (enabled:false) — nothing paints
   const hor = H * .64, cx = W / 2;
   const th = THEMES[state.theme], sc = SCENES[state.scene];
   specCompute(clock);
@@ -609,12 +614,14 @@ function render(){
 /* ============ platform-tick interface (D37) ============ */
 
 function step(){
-  const v = .25;                      // fixed cruise speed (speed dial is editor-only upstream)
+  // the deck's speed dial: 0-100, default 25; lateral and z keep the deck's
+  // own rates, so speed 25 cruises exactly like the source project
+  const v = Math.max(0, Math.min(100, Number(state.speed) || 0)) / 100;
   const m = state.motion;
-  if (m === "left")          camX += v * CAM_STEP;
-  else if (m === "right")    camX -= v * CAM_STEP;
-  else if (m === "forward")  camZ += v * CAM_STEP;
-  else if (m === "backward") camZ -= v * CAM_STEP;
+  if (m === "left")          camX += v * CAM_SPEED * TICK_S;
+  else if (m === "right")    camX -= v * CAM_SPEED * TICK_S;
+  else if (m === "forward")  camZ += v * CAM_Z_SPEED * TICK_S;
+  else if (m === "backward") camZ -= v * CAM_Z_SPEED * TICK_S;
   if (roadActive() && m !== "left" && m !== "right")
     camX = Math.round(camX);          // settle on a lane so road edges sit on grid lines
   clock += TICK_S;
@@ -632,9 +639,11 @@ function applyCfg(next){
   merged.motion = motionLegal(merged.scene, merged.motion);
   merged.glass = Math.max(0, Math.min(1, Number(merged.glass)));
   if (isNaN(merged.glass)) merged.glass = DEFAULTS.glass;
+  merged.speed = Math.max(0, Math.min(100, Number(merged.speed)));
+  if (isNaN(merged.speed)) merged.speed = DEFAULTS.speed;
   // scanlines ride along as config: the overlay itself is a dashboard DOM
   // layer (not the scene canvas), so apply() only carries the flag
-  ["spectrum", "stars", "road", "scanlines"].forEach(function (k){
+  ["spectrum", "stars", "road", "scanlines", "enabled"].forEach(function (k){
     merged[k] = !!merged[k];
   });
   state = merged;
@@ -642,9 +651,14 @@ function applyCfg(next){
 
 let liveCanvas = null;
 
-/* hot-swap the running scene (editor preview pushes) */
+/* hot-swap the running scene (editor preview pushes); a push that enables
+   the scene in a page booted without it mounts on demand */
 function apply(next){
   applyCfg(next);
+  if (!liveCanvas && state.enabled !== false){
+    const el = document.getElementById("flair-scene");
+    if (el) mount(el, null);
+  }
   if (liveCanvas) render();
 }
 
@@ -676,8 +690,9 @@ window.TLCDFlair = {
   SCENES: SCENES, THEMES: THEMES, MOTIONS: MOTION_LABELS, DEFAULTS: DEFAULTS,
 };
 
-/* auto-mount: the dashboard page ships #flair-scene + an injected config */
-if (window.TLCD_FLAIR){
+/* auto-mount: the dashboard page ships #flair-scene + an injected config;
+   enabled:false (the editor's "background scene" checkbox) skips the mount */
+if (window.TLCD_FLAIR && window.TLCD_FLAIR.enabled !== false){
   const el = document.getElementById("flair-scene");
   if (el) mount(el, window.TLCD_FLAIR);
 }

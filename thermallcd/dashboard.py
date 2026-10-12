@@ -171,19 +171,14 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/metrics":
             return self._json(200, self.server.metrics.snapshot())
         if route == "/api/nvtop":
-            # image-source widget (T4): the pane's TUI as JPEG; 404 when the
-            # layout has no nvtop slot — the widget dims, never fabricates.
-            # w/h: the widget's measured content box (slot minus its title +
-            # padding chrome), so the TUI renders 1:1 under that chrome
-            def _box(key):
-                try:
-                    return int(query.get(key, [None])[0])
-                except (TypeError, ValueError):
-                    return None
-            data = self.server.nvtop.jpeg(_box("w"), _box("h"))
+            # image-source widget (T4): the pane's TUI as a transparent
+            # PNG; 404 when the layout has no nvtop slot — the widget dims,
+            # never fabricates. The pane's size is derived server-side from
+            # the slot (see NvtopSource.image) — query params are ignored.
+            data = self.server.nvtop.image()
             if data is None:
                 return self._json(404, {"error": "nvtop not placed"})
-            return self._send(200, data, "image/jpeg")
+            return self._send(200, data, "image/png")
         if route == "/api/widgets":
             return self._json(200, {"widgets": self.server.registry.scan()})
         if route == "/api/frame":

@@ -467,6 +467,7 @@ function refreshFlairUI(needsThumbs) {
       el.value = pendingFlair.motion;
     } else if (el.tagName === "SELECT") el.value = pendingFlair[k];
   });
+  if (flairEls.speed) flairEls.speed.value = Math.round(pendingFlair.speed);
   // thumbnails are 8 full scene renders: only re-render them when something
   // that changes their pixels moved — the glass slider fires 'input'
   // continuously while dragging, and the thumbs are glass-independent.
@@ -553,6 +554,15 @@ function initFlair(saved) {
     flairChanged();
   });
   flairEls.motion = row("motion", motion);
+
+  flairEls.enabled = checkbox("background scene", "enabled", false);
+  var speed = document.createElement("input");
+  speed.type = "range"; speed.min = "0"; speed.max = "100";
+  speed.addEventListener("input", function () {
+    pendingFlair.speed = Number(speed.value);
+    flairChanged(false);
+  });
+  flairEls.speed = row("scene speed", speed);
 
   flairEls.stars = checkbox("stars", "stars");
   flairEls.spectrum = checkbox("spectrum — the scene pulses with load", "spectrum", false);

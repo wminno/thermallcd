@@ -270,8 +270,8 @@ class TestFlairLayout(PlatformTestBase):
         # defaults fill the keys the editor did not send (road, scanlines)
         self.assertEqual(doc["flair"], {
             "scene": "city", "theme": "noir", "motion": "forward",
-            "glass": 0.5, "spectrum": False, "stars": False, "road": False,
-            "scanlines": True})
+            "glass": 0.5, "speed": 25, "spectrum": False, "stars": False,
+            "road": False, "scanlines": True, "enabled": True})
 
     def test_glass_clamped_and_unknown_keys_dropped(self):
         layout = {"widgets": [], "flair": {"glass": 1.7, "scene": "grid",

@@ -23,16 +23,11 @@
   }
 
   // the TUI must fit UNDER this iframe's chrome, not the raw slot: the pane
-  // is sized to the measured content box (body padding + title strip), so the
-  // img displays 1:1 instead of overflowing and clipping its bottom rows.
-  // Re-measured per refresh — fonts settle late, resizes land on the next
-  // poll (D19: resize = new pty size).
-  function fitBox() {
-    var title = document.querySelector(".tlcd-title");
-    var chrome = 24 + (title ? title.offsetHeight + 8 : 0);  // 24 = body padding
-    return [Math.max(200, window.innerWidth - 24),
-            Math.max(80, window.innerHeight - chrome)];
-  }
+  // is sized server-side to this iframe's content box (slot minus the fixed
+  // chrome), so the img displays 1:1 and the TUI's bottom rows stay visible.
+  // This tab does NOT nominate a size — two viewers measuring slightly
+  // differently (fonts, zoom) used to tug the pane size every poll,
+  // restarting nvtop faster than it could draw.
 
   function refresh() {
     if (tooSmall()) {
@@ -42,9 +37,7 @@
       return;
     }
     var TOKEN = window.TLCD_TOKEN || "";
-    var box = fitBox();
-    fetch("/api/nvtop?token=" + encodeURIComponent(TOKEN) +
-          "&w=" + box[0] + "&h=" + box[1])
+    fetch("/api/nvtop?token=" + encodeURIComponent(TOKEN))
       .then(function (r) {
         if (!r.ok) throw new Error("nvtop " + r.status);
         return r.blob();

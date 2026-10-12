@@ -78,23 +78,29 @@
   <div class="watermark">/*__WATERMARK__*/</div>
 <script src="/assets/flair.js"></script>
 <script>
-  // boot: hide the scanline overlay before first paint when the saved flair
-  // config turned it off (the editor path goes through renderPreview instead)
+  // boot: honor saved-flair toggles before first paint — scanlines off
+  // hides the overlay; the scene disabled leaves #flair-scene unmounted
+  // (flair.js checks enabled) and hidden (the editor path flips this live
+  // through renderPreview instead)
   if (window.TLCD_FLAIR && window.TLCD_FLAIR.scanlines === false) {
     document.querySelector(".scanlines").style.display = "none";
   }
+  if (window.TLCD_FLAIR && window.TLCD_FLAIR.enabled === false) {
+    document.getElementById("flair-scene").style.display = "none";
+  }
 
-  // D37 motion budget: the platform tick. --tlcd-tick steps at 0.5 Hz (the
-  // budget ceiling for anything that moves on this page) and flair steps one
-  // deliberate repaint per tick — between ticks nothing paints, so the
-  // capture's frame clock sees one settled frame per tick, never churn.
-  // Widgets that later want in on the budget read --tlcd-tick.
+  // D37 motion budget: the platform tick. --tlcd-tick steps at ~7 Hz — just
+  // above the capture's 6 FPS frame clock, so every panel frame carries
+  // fresh pixels — and flair steps one repaint per tick, advancing
+  // continuously at the deck's cruise speed (flair.js CAM_SPEED). The 0.5 Hz
+  // first cut crawled; a 4 Hz retry stepped in visible jumps. Widgets that
+  // later want in on the budget read --tlcd-tick.
   var tlcdTick = 0;
   setInterval(function () {
     tlcdTick++;
     document.documentElement.style.setProperty("--tlcd-tick", tlcdTick);
     if (window.TLCDFlair) window.TLCDFlair.step();
-  }, 2000);
+  }, 140);
 
   // D27: a saved layout change is visible on the panel within one second
   (function pollLayout() {
@@ -134,6 +140,10 @@
         // toggle is a display flip here, not a scene re-render
         var sl = document.querySelector(".scanlines");
         if (sl) sl.style.display = flair.scanlines === false ? "none" : "";
+        // the scene itself: enabled:false hides the canvas (flair.js apply()
+        // mounts on demand when a later push re-enables)
+        var fs = document.getElementById("flair-scene");
+        if (fs) fs.style.display = flair.enabled === false ? "none" : "";
       }
     }
     var grid = document.querySelector(".grid");

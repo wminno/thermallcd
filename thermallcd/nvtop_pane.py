@@ -17,7 +17,7 @@ import termios
 import threading
 
 import pyte
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
@@ -193,9 +193,12 @@ class NvtopPane:
             return list(self.screen.display), self.screen.buffer
 
     def render(self, width, height) -> Image.Image:
-        """Draw the terminal grid onto a width x height image."""
+        """Draw the terminal grid onto a width x height RGBA image; the
+        default background is keyed to transparent so the widget's glass
+        panel shows through, like the CSS widgets. ANSI "black" cells
+        (40,40,46) differ enough from the key to stay opaque."""
         lines, buf = self._snapshot()
-        img = Image.new("RGB", (width, height), BG_DEFAULT)
+        img = Image.new("RGBA", (width, height), BG_DEFAULT + (255,))
         d = ImageDraw.Draw(img)
         cw, ch = self.cw, self.ch
         for y in range(min(self.rows, height // ch)):
@@ -210,6 +213,12 @@ class NvtopPane:
                     fg = _color(char.fg, FG_DEFAULT)
                     font = self.font_bold if char.bold else self.font_reg
                     d.text((x * cw, y * ch), char.data, font=font, fill=fg)
+        # key the background out (near matches too, so antialiased glyph
+        # edges don't leave a dark halo over the glass)
+        bg_img = Image.new("RGB", img.size, BG_DEFAULT)
+        diff = ImageChops.difference(img.convert("RGB"), bg_img)
+        alpha = diff.convert("L").point(lambda p: 0 if p < 16 else 255)
+        img.putalpha(alpha)
         return img
 
     @classmethod
@@ -226,14 +235,23 @@ class NvtopPane:
 class NvtopSource:
     """Server-side image source for the nvtop widget (T4/D19).
 
-    Owns one NvtopPane sized to the widget's layout slot; a slot-size change
-    recreates the pane, which re-renders nvtop at the new terminal size
-    (resize: free). A 60 s force_repaint loop bounds ncurses artifact
-    accumulation (R4). The pane is created lazily on first request and
-    dropped when the layout has no nvtop slot.
+    Owns one NvtopPane sized to the widget's content box — the layout slot
+    minus the widget's fixed chrome; a slot-size change recreates the pane,
+    which re-renders nvtop at the new terminal size (resize: free). A 60 s
+    force_repaint loop bounds ncurses artifact accumulation (R4). The pane
+    is created lazily on first request and dropped when the layout has no
+    nvtop slot.
     """
 
     CELL_W, CELL_H, GAP = 150, 138, 8  # dashboard grid geometry (D33)
+    # the nvtop widget's fixed chrome (widgets/nvtop/index.html): 12px body
+    # padding each side + the title strip and its 8px gap. The pane box is
+    # the slot minus this, derived HERE once per slot change — viewers never
+    # nominate a size. Viewer-nominated boxes thrashed the pane: two tabs
+    # measuring slightly differently (font metrics, zoom) alternated every
+    # poll and forked nvtop faster than it could draw. A viewer whose
+    # metrics differ only scales the img, never the pane.
+    CHROME_W, CHROME_H = 24, 53
 
     def __init__(self, layout, binary="/usr/bin/nvtop"):
         self.layout = layout          # LayoutStore — re-read per request
@@ -264,47 +282,30 @@ class NvtopSource:
                 if self._pane:
                     self._pane.force_repaint()
 
-    def jpeg(self, wpx=None, hpx=None):
-        """JPEG of the pane; None when no slot/binary.
+    def image(self):
+        """PNG of the pane, background keyed transparent; None when no
+        slot/binary.
 
-        (wpx, hpx) is the widget's measured content box — its slot minus the
-        title strip and body padding — so the TUI renders 1:1 under the widget
-        chrome. Rendering at the raw slot made the img overflow its iframe and
-        clip the TUI's bottom rows. Requests without w/h (legacy tabs) are
-        served at the pane's current size and never resize it; the pane never
-        exceeds the slot either way."""
+        The pane renders at the slot minus the widget's fixed chrome, so the
+        TUI sits 1:1 under the title strip (rendering at the raw slot made
+        the img overflow its iframe and clip the TUI's bottom rows). The box
+        is derived here, once per slot change — never from the requester."""
         slot = self._slot_size()
         if slot is None or not os.path.isfile(self.binary):
             self._drop()
             return None
         slot_px = self.pixels(*slot)
+        box = (max(60, slot_px[0] - self.CHROME_W),
+               max(40, slot_px[1] - self.CHROME_H))
         with self._lock:
-            if wpx is None or hpx is None:
-                box = None    # legacy requester (no w/h) — see below
-            else:
-                try:
-                    box = (max(60, min(int(wpx), slot_px[0])),
-                           max(40, min(int(hpx), slot_px[1])))
-                except (TypeError, ValueError):
-                    box = None
-            # only chrome-aware requests (w/h present) may move the pane.
-            # Legacy polls — a tab running pre-contract widget JS, another
-            # viewer's preview — are served at the pane's current size instead:
-            # letting them resize too let two viewers with different boxes tug
-            # the pty size back and forth every poll, which restarts nvtop
-            # faster than it can draw and blanks the panel's widget.
-            if box is not None and (box != self._box or self._pane is None):
+            if box != self._box or self._pane is None:
                 if self._pane:
                     self._pane.stop()   # recreate: resize = new pty size (D19)
                 self._pane = NvtopPane.for_area(*box, binary=self.binary)
                 self._box = box
-            elif self._pane is None:
-                # first requester is legacy: build at the raw slot (old shape)
-                self._pane = NvtopPane.for_area(*slot_px, binary=self.binary)
-                self._box = slot_px
             img = self._pane.render(*self._box)
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
+        img.save(buf, format="PNG")
         return buf.getvalue()
 
     def _drop(self):
