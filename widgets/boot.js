@@ -28,13 +28,16 @@
       .then(function (r) { if (!r.ok) throw new Error("metrics " + r.status); return r.json(); })
       .then(function (snap) {
         var root = document.body;
-        if (snap.ts === lastTs) {           // same tick: nothing moved
-          if (Date.now() / 1000 - snap.ts > Math.max(5 * snap.refresh, 10)) markStale(root);
-          return;
+        if (snap.ts !== lastTs) {
+          lastTs = snap.ts;
+          unmarkStale(root);
+          render("live", snap.data ? snap.data : snap);
+        } else if (Date.now() / 1000 - snap.ts > Math.max(5 * snap.refresh, 10)) {
+          markStale(root);   // same tick AND old: the snapshot stopped advancing
         }
-        lastTs = snap.ts;
-        unmarkStale(root);
-        render("live", snap.data ? snap.data : snap);
+        // ALWAYS reschedule: the poll cadence is close to the snapshot's, so
+        // a duplicate ts is a routine phase overlap, not a stop signal — the
+        // early return here used to kill the loop and freeze the widget
         timer = setTimeout(poll, Math.max((snap.refresh || 1) * 1000, 250));
       })
       .catch(function () {
