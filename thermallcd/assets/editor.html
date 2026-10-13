@@ -79,12 +79,13 @@
     transform: scale(.5); transform-origin: 0 0;
     pointer-events: none;             /* drags go to the overlay, not the preview */
   }
-  /* GridStack overlay: dashboard grid (inset 16, gap 8, tracks 150x138) at 0.5x.
-     Half-scale pitch is 79x73; GridStack keeps its 2px margins INSIDE item
-     boxes, so the container sits at (6,6) sized 12*79 x 3*73 and item content
-     (75x69) lands exactly on dashboard track origins (8 + 79*i, 8 + 73*j).
-     The background paints those same content cells: a 75x69 fill inside each
-     79x73 tile, offset 2px — free space lights up, gutters stay dark. */
+  /* GridStack overlay: dashboard grid (inset 16, gap 8, tracks 150x138) shown
+     at SCALE — the script below drives the real numbers from that one knob;
+     these 0.5x fallbacks match SCALE = 0.5. Pitch is the dashboard cell pitch
+     (158x146) times SCALE; GridStack keeps its margins INSIDE item boxes, so
+     margin = 4*SCALE makes item content land exactly on dashboard track
+     origins. The background paints ~those content cells: a track-sized fill
+     inside each pitch tile, offset 2px — free space lights up, gutters dark. */
   #tlcd-canvas {
     position: absolute; left: 6px; top: 6px; width: 948px; height: 219px;
     background-image:
@@ -187,6 +188,7 @@
   <h1>THERMALLCD · EDITOR</h1>
   <select id="device-select" class="btn" hidden
           aria-label="panel being edited"></select>
+  <select id="zoom" class="btn" aria-label="preview zoom"></select>
   <button id="undo" class="btn" disabled>UNDO</button>
   <button id="redo" class="btn" disabled>REDO</button>
   <button id="save" class="btn">SAVE<span class="dot"></span></button>
@@ -208,16 +210,99 @@
 <script src="/assets/flair.js"></script>
 <script>
 "use strict";
-var grid = GridStack.init({
-  column: 12,
-  cellHeight: 73,          // dashboard rows are 138px + 8 gutter = 73 pitch at 0.5x
-  margin: 2,               // inside item boxes: content is 75x69 = a dashboard track
-  acceptWidgets: ".palette-item",  // palette drag-in: creates the grid's
-                                   // droppable so an external drop can land
-  minRow: 3, maxRow: 3,    // the panel is a fixed 12x3 (D33)
-  float: true,
-  disableOneColumnMode: true,
-}, "#tlcd-canvas");
+// -- editor zoom: the user picks the preview magnification (persisted in
+// localStorage). The 1920x462 panel is shown at SCALE; a dashboard cell
+// pitches 158x146 real px (150x138 track + 8 gutter), so the GridStack pitch
+// is that times SCALE and the margin is 4*SCALE so item content is exactly a
+// scaled dashboard track.
+var ZOOMS = [40, 50, 65, 75, 85, 100];
+var SCALE = 0.65;
+try {
+  var storedZoom = parseInt(localStorage.getItem("tlcd-editor-zoom"), 10);
+  if (ZOOMS.indexOf(storedZoom) >= 0) SCALE = storedZoom / 100;
+} catch (e) {}
+
+function applyScale() {
+  var canvas = document.querySelector(".canvas");
+  canvas.style.width = 1920 * SCALE + "px";
+  canvas.style.height = 462 * SCALE + "px";
+  canvas.querySelector("iframe").style.transform = "scale(" + SCALE + ")";
+  var g = document.getElementById("tlcd-canvas");
+  g.style.left = g.style.top = 12 * SCALE + "px";   // inset 16*SCALE less the margin
+  g.style.width = 12 * 158 * SCALE + "px";
+  g.style.height = 3 * 146 * SCALE + "px";
+  g.style.backgroundSize = 158 * SCALE + "px " + 146 * SCALE + "px";
+}
+applyScale();
+
+function makeGrid() {
+  var g = GridStack.init({
+    column: 12,
+    cellHeight: 146 * SCALE, // dashboard rows: 138px track + 8 gutter, scaled
+    margin: 4 * SCALE,       // inside item boxes: content is a scaled track
+    acceptWidgets: ".palette-item",  // palette drag-in: creates the grid's
+                                     // droppable so an external drop can land
+    minRow: 3, maxRow: 3,    // the panel is a fixed 12x3 (D33)
+    float: true,
+    disableOneColumnMode: true,
+  }, "#tlcd-canvas");
+  g.on("change", settle);
+  g.on("added", settle);                        // palette drag-in drop
+  g.on("removed", function () { snapshot(); }); // deletions may not fire change
+  g.on("removed", function (ns) {               // T17 hygiene
+    ns.forEach(function (n) { itemOptions.delete(n.el); });
+  });
+  return g;
+}
+var grid = makeGrid();
+
+// -- zoom picker: gridstack bakes the pitch into its container at init, so a
+// new magnification rebuilds it — the arrangement and per-instance options
+// ride across (same strip-and-rekey as undo/redo)
+(function initZoom() {
+  var sel = document.getElementById("zoom");
+  ZOOMS.forEach(function (p) {
+    var o = document.createElement("option");
+    o.value = String(p);
+    o.textContent = p + "%";
+    sel.appendChild(o);
+  });
+  sel.value = String(Math.round(SCALE * 100));
+  sel.addEventListener("change", function () {
+    var s = parseInt(sel.value, 10) / 100;
+    if (s === SCALE) return;
+    SCALE = s;
+    try { localStorage.setItem("tlcd-editor-zoom", String(s)); } catch (e) {}
+    loading = true;
+    try {
+      var w = nodes();             // arrangement + options, captured first
+      var oldG = document.getElementById("tlcd-canvas");
+      grid.destroy();              // v12 removes the container element too
+      if (oldG && oldG.isConnected) oldG.remove();
+      var fresh = document.createElement("div");
+      fresh.id = "tlcd-canvas";
+      document.querySelector(".canvas").appendChild(fresh);
+      applyScale();                // scale geometry onto the fresh container
+      grid = makeGrid();
+      grid.load(w.map(function (n) {
+        var c = Object.assign({}, n); delete c.options; return c;
+      }));
+      itemOptions.clear();
+      w.forEach(function (x) {
+        if (x.options && Object.keys(x.options).length) {
+          grid.engine.nodes.forEach(function (n) {
+            if (n.id === x.id) itemOptions.set(n.el, x.options);
+          });
+        }
+      });
+    } finally {
+      loading = false;             // never strand settle/snapshot as no-ops
+    }
+    deselect();
+    updateChrome();
+    pushPreview();
+  });
+})();
 
 var hist = [], ptr = -1, baselinePtr = -1, loading = false;
 var selected = null;
@@ -370,13 +455,6 @@ function updateChrome() {
 }
 
 function markDirty() { updateChrome(); }
-
-grid.on("change", settle);
-grid.on("added", settle);                        // palette drag-in drop
-grid.on("removed", function () { snapshot(); }); // deletions may not fire change
-grid.on("removed", function (ns) {
-  ns.forEach(function (n) { itemOptions.delete(n.el); });   // T17 hygiene
-});
 
 // -- selection + delete (D31: click-to-select, delete button on the card) --
 function deselect() {
