@@ -7,10 +7,12 @@
 </head>
 <body>
   <div class="tlcd-title">MEMORY</div>
-  <div class="tlcd-big"><span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span></div>
-  <div class="tlcd-bar" style="margin: 8px 0"><i id="bar" style="width:0%"></i></div>
-  <div id="detail" class="tlcd-dim-text" style="font-size:14px">&mdash;</div>
-  <div id="swap" class="tlcd-dim-text" style="font-size:14px"></div>
+  <!-- sized for the 2x1 slot: 138px iframe - 24px body padding - ~30px title
+       leaves ~84px; mid tier + tight lines keep the swap line unclipped -->
+  <div class="tlcd-mid" style="line-height:1.1"><span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span></div>
+  <div class="tlcd-bar" style="height:8px; margin:6px 0"><i id="bar" style="width:0%"></i></div>
+  <div id="detail" class="tlcd-dim-text" style="font-size:12px; line-height:1.3">&mdash;</div>
+  <div id="swap" class="tlcd-dim-text" style="font-size:12px; line-height:1.3"></div>
 <script>
   // T25 memory/swap widget. mem fields come from /proc/meminfo via the
   // sampler: used_pct/total_kb/avail_kb/used_kb plus a swap block. A missing

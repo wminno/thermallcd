@@ -2,7 +2,7 @@
   "name": "mem",
   "title": "MEMORY",
   "description": "RAM usage and swap, with a usage bar.",
-  "size": { "w": 2, "h": 2 },
+  "size": { "w": 2, "h": 1 },
   "resize": "free",
   "min": { "w": 2, "h": 1 },
   "options": []
