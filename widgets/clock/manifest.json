@@ -1,0 +1,20 @@
+{
+  "name": "clock",
+  "title": "CLOCK",
+  "description": "Local time, digital or analog, with the date.",
+  "size": { "w": 2, "h": 2 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 },
+  "options": [
+    { "key": "view", "label": "View", "type": "select",
+      "choices": [
+        { "value": "digital", "label": "Digital" },
+        { "value": "analog", "label": "Analog face" }
+      ] },
+    { "key": "format", "label": "Hours", "type": "select",
+      "choices": [
+        { "value": "24", "label": "24-hour" },
+        { "value": "12", "label": "12-hour" }
+      ] }
+  ]
+}

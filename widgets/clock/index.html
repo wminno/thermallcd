@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">CLOCK</div>
+  <div id="digital">
+    <div class="tlcd-big"><span id="time">&mdash;</span><span id="sec"
+         class="tlcd-dim-text" style="font-size:18px"></span><span id="ampm"
+         class="tlcd-dim-text" style="font-size:18px"></span></div>
+    <div id="date" class="tlcd-dim-text" style="font-size:15px">&mdash;</div>
+  </div>
+  <div id="analog" style="display:none">
+    <canvas id="face" style="width:100%; display:block"></canvas>
+    <div id="adate" class="tlcd-dim-text" style="font-size:13px; text-align:center">&mdash;</div>
+  </div>
+<script>
+  // T19 clock: time is browser-local — the capture runs on this machine, so
+  // the machine clock IS the panel clock. boot.js still drives the stale
+  // dimming (D23); the tick is 1 Hz, well under the panel's 15 (D37).
+  var OPTS = window.TLCD_OPTIONS || {};
+  var view = OPTS.view || "digital";
+  var h24 = (OPTS.format || "24") !== "12";
+
+  var DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function dateLine(now) {
+    return DOW[now.getDay()] + " " + now.getDate() + " " +
+           MON[now.getMonth()] + " " + now.getFullYear();
+  }
+
+  var digitalEl = document.getElementById("digital");
+  var analogEl = document.getElementById("analog");
+  if (view === "analog") {
+    digitalEl.style.display = "none";
+    analogEl.style.display = "block";
+  }
+
+  function tick() {
+    var now = new Date();
+    if (view === "analog") {
+      drawFace(now);
+      document.getElementById("adate").textContent = dateLine(now);
+      return;
+    }
+    var h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+    var ampm = "";
+    if (!h24) {
+      ampm = h < 12 ? " AM" : " PM";
+      h = h % 12 || 12;
+    }
+    document.getElementById("time").textContent =
+      (h < 10 && h24 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+    document.getElementById("sec").textContent =
+      ":" + (s < 10 ? "0" : "") + s;
+    document.getElementById("ampm").textContent = ampm;
+    document.getElementById("date").textContent = dateLine(now);
+  }
+
+  function drawFace(now) {
+    var c = document.getElementById("face");
+    var w = c.clientWidth;
+    var h = Math.min(w, window.innerHeight - 100);
+    if (w < 20 || h < 20) return;               // slot collapsed — skip the pass
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    var ctx = c.getContext("2d");
+    var cs = getComputedStyle(document.documentElement);
+    var text = cs.getPropertyValue("--tlcd-text").trim() || "#f0edf7";
+    var dim = cs.getPropertyValue("--tlcd-dim").trim() || "#9a92b8";
+    var accent = cs.getPropertyValue("--tlcd-accent").trim() || "#ff2e83";
+    var line = cs.getPropertyValue("--tlcd-line").trim() || "#282043";
+    ctx.clearRect(0, 0, w, h);
+    var cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 3;
+    ctx.strokeStyle = line; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    for (var i = 0; i < 60; i++) {              // minute ticks, hours heavier
+      var a = i * Math.PI / 30, hour = i % 5 === 0;
+      var r1 = r - (hour ? 10 : 5);
+      ctx.strokeStyle = hour ? text : dim;
+      ctx.lineWidth = hour ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.sin(a) * r1, cy - Math.cos(a) * r1);
+      ctx.lineTo(cx + Math.sin(a) * (r - 2), cy - Math.cos(a) * (r - 2));
+      ctx.stroke();
+    }
+    var sec = now.getSeconds(), min = now.getMinutes();
+    function hand(len, frac, width, color) {
+      var a = frac * Math.PI * 2;
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx - Math.sin(a) * len * 0.15, cy + Math.cos(a) * len * 0.15);
+      ctx.lineTo(cx + Math.sin(a) * len, cy - Math.cos(a) * len);
+      ctx.stroke();
+    }
+    hand(r * 0.5, (now.getHours() % 12 + min / 60) / 12, 4, text);
+    hand(r * 0.75, (min + sec / 60) / 60, 2.5, text);
+    hand(r * 0.8, sec / 60, 1.5, accent);
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  tick();
+  setInterval(tick, 1000);
+</script>
+</body>
+</html>
