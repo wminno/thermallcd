@@ -115,7 +115,14 @@ class MetricsSampler:
             avail = mem.get("MemAvailable")
             if total and avail is not None:
                 data["mem"] = {"used_pct": round(100.0 * (total - avail) / total, 1),
-                               "total_kb": total, "avail_kb": avail}
+                               "total_kb": total, "avail_kb": avail,
+                               "used_kb": total - avail}
+                swap_total = mem.get("SwapTotal")  # swap for the memory widget (T25)
+                if swap_total is not None:
+                    used = swap_total - mem.get("SwapFree", 0)
+                    data["mem"]["swap"] = {
+                        "total_kb": swap_total, "used_kb": used,
+                        "used_pct": round(100.0 * used / swap_total, 1) if swap_total else None}
         except OSError:
             pass
         try:

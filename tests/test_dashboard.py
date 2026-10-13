@@ -11,6 +11,7 @@ import threading
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from thermallcd import dashboard as dash
 from thermallcd import layout as layout_mod
@@ -540,6 +541,36 @@ class TestProfiles(unittest.TestCase):
         (profiles / "bad.json").write_text("{nope")
         (profiles / "empty.json").write_text('{"id": "x"}')  # missing w/h
         self.assertEqual(set(dash.load_profiles(tmp.name)), {"p1"})
+
+
+class TestMemSwap(unittest.TestCase):
+    """T25: the mem block carries used_kb and a swap block for the widget."""
+
+    def _sample(self, meminfo):
+        sampler = dash.metrics_mod.MetricsSampler(interval=0.05)
+        with mock.patch.object(dash.metrics_mod, "_read_meminfo",
+                               return_value=dict(meminfo)):
+            return sampler._sample_once()
+
+    def test_used_kb_and_swap_fields(self):
+        data = self._sample({"MemTotal": 8000000, "MemAvailable": 3000000,
+                             "SwapTotal": 2000000, "SwapFree": 1500000})
+        self.assertEqual(data["mem"]["used_kb"], 5000000)
+        self.assertEqual(data["mem"]["swap"]["total_kb"], 2000000)
+        self.assertEqual(data["mem"]["swap"]["used_kb"], 500000)
+        self.assertEqual(data["mem"]["swap"]["used_pct"], 25.0)
+
+    def test_no_swap_reports_zero_total_and_none_pct(self):
+        # SwapTotal present but 0: the widget shows "no swap configured"
+        data = self._sample({"MemTotal": 8000000, "MemAvailable": 3000000,
+                             "SwapTotal": 0, "SwapFree": 0})
+        self.assertEqual(data["mem"]["swap"]["total_kb"], 0)
+        self.assertIsNone(data["mem"]["swap"]["used_pct"])
+
+    def test_missing_swaptotal_omits_block(self):
+        # a kernel without swap support lists no SwapTotal at all
+        data = self._sample({"MemTotal": 8000000, "MemAvailable": 3000000})
+        self.assertNotIn("swap", data["mem"])
 
 
 if __name__ == "__main__":

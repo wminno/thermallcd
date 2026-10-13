@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">MEMORY</div>
+  <div class="tlcd-big"><span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span></div>
+  <div class="tlcd-bar" style="margin: 8px 0"><i id="bar" style="width:0%"></i></div>
+  <div id="detail" class="tlcd-dim-text" style="font-size:14px">&mdash;</div>
+  <div id="swap" class="tlcd-dim-text" style="font-size:14px"></div>
+<script>
+  // T25 memory/swap widget. mem fields come from /proc/meminfo via the
+  // sampler: used_pct/total_kb/avail_kb/used_kb plus a swap block. A missing
+  // block shows "—" (never a fabricated zero, D23); swap.total_kb === 0
+  // means the host has no swap at all.
+  function fmt(kb) {
+    return (kb / 1048576).toFixed(1); // kB -> GiB
+  }
+
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return; // keep last values, boot dims the body
+    var mem = data && data.mem;
+    if (!mem || mem.used_pct == null) {
+      document.getElementById("pct").textContent = "—";
+      document.getElementById("detail").textContent = "no memory data";
+      document.getElementById("swap").textContent = "";
+      return;
+    }
+    document.getElementById("pct").textContent = mem.used_pct;
+    document.getElementById("bar").style.width = Math.min(100, mem.used_pct) + "%";
+    document.getElementById("detail").textContent =
+      fmt(mem.used_kb) + " / " + fmt(mem.total_kb) + " GiB — " +
+      fmt(mem.avail_kb) + " free";
+    var swap = mem.swap;
+    if (!swap || swap.total_kb == null) {
+      document.getElementById("swap").textContent = "";
+    } else if (swap.total_kb === 0) {
+      document.getElementById("swap").textContent = "no swap configured";
+    } else if (swap.used_pct == null) {
+      document.getElementById("swap").textContent = "swap " + fmt(swap.used_kb) + " / " + fmt(swap.total_kb) + " GiB";
+    } else {
+      document.getElementById("swap").textContent =
+        "swap " + fmt(swap.used_kb) + " / " + fmt(swap.total_kb) + " GiB (" + swap.used_pct + "%)";
+    }
+  });
+</script>
+</body>
+</html>
