@@ -299,6 +299,42 @@ class TestLayoutStore(PlatformTestBase):
         self.assertTrue(state["shuffled"])
         self.assertEqual(state["widgets"], permuted["widgets"])
 
+    def test_default_save_clears_panel_key_shuffle_state(self):
+        # the panel persists its permutation at its OWN device key while
+        # the single-panel editor saves the default arrangement — the
+        # stale device-key file used to boot over every new save
+        # (user report 2026-10-13: "panel did not update after I saved")
+        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        permuted = {"widgets": [{"id": "a", "x": 2, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("default", base)
+        self.store.save("panel7", permuted, shuffled=True)
+        self.assertIsNotNone(self.store.shuffle_state("panel7"))
+        self.store.save("default", base)          # a fresh canonical save
+        self.assertIsNone(self.store.shuffle_state("panel7"))
+
+    def test_default_save_keeps_forked_device_shuffle_state(self):
+        # a device with its own canonical file is unaffected by default
+        # saves — its permutation keys to its own arrangement
+        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        fork = {"widgets": [{"id": "a", "x": 4, "y": 0, "w": 2, "h": 1}]}
+        permuted = {"widgets": [{"id": "a", "x": 8, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("default", base)
+        self.store.save("panel8", fork)
+        self.store.save("panel8", permuted, shuffled=True)
+        self.store.save("default", base)
+        self.assertIsNotNone(self.store.shuffle_state("panel8"))
+
+    def test_shuffle_fallback_needs_default_rendering(self):
+        # the read fallback serves the default's permutation only while the
+        # device actually renders the default layout (no canonical of its
+        # own); a forked device boots its own arrangement unshuffled instead
+        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
+        permuted = {"widgets": [{"id": "a", "x": 2, "y": 0, "w": 2, "h": 1}]}
+        self.store.save("default", base)
+        self.store.save("default", permuted, shuffled=True)
+        self.store.save("panel9", base)           # fork: own canonical now
+        self.assertIsNone(self.store.shuffle_state("panel9"))
+
 
 class TestTtySource(PlatformTestBase):
     # T18: the pane derives entirely from the layout's tty item — the
@@ -429,11 +465,13 @@ class TestFlairLayout(PlatformTestBase):
         status, _, doc = _http(f"{self.base}/api/layout?device=flair-dev",
                                token=self.token.token)
         self.assertEqual(status, 200)
-        # defaults fill the keys the editor did not send (road, scanlines)
+        # defaults fill the keys the editor did not send (road, scanlines,
+        # rotation)
         self.assertEqual(doc["flair"], {
             "scene": "city", "theme": "noir", "motion": "forward",
             "glass": 0.5, "speed": 25, "spectrum": False, "stars": False,
-            "road": False, "scanlines": True, "enabled": True})
+            "road": False, "scanlines": True, "enabled": True,
+            "rotate_min": 0, "rotate_what": "scene"})
 
     def test_glass_clamped_and_unknown_keys_dropped(self):
         layout = {"widgets": [], "flair": {"glass": 1.7, "scene": "grid",
@@ -453,6 +491,39 @@ class TestFlairLayout(PlatformTestBase):
             status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev",
                                  method="PUT", token=self.token.token, body=layout)
             self.assertEqual(status, 400, f"flair={flair!r}")
+
+    def test_rotation_fields_roundtrip(self):
+        # T27: rotate_min coerces to a non-negative int, rotate_what is
+        # whitelisted, and both ride the doc the dashboard page bakes in
+        layout = {"widgets": [], "flair": {"scene": "ridge",
+                                           "rotate_min": 7.4,
+                                           "rotate_what": "all"}}
+        status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev", method="PUT",
+                             token=self.token.token, body=layout)
+        self.assertEqual(status, 200)
+        _, _, doc = _http(f"{self.base}/api/layout?device=flair-dev",
+                          token=self.token.token)
+        self.assertEqual(doc["flair"]["rotate_min"], 7)
+        self.assertEqual(doc["flair"]["rotate_what"], "all")
+
+    def test_bad_rotation_fields_400(self):
+        for flair in ({"rotate_min": -1}, {"rotate_min": "soon"},
+                      {"rotate_what": "everything"}):
+            layout = {"widgets": [], "flair": flair}
+            status, _, _ = _http(f"{self.base}/api/layout?device=flair-dev",
+                                 method="PUT", token=self.token.token, body=layout)
+            self.assertEqual(status, 400, f"flair={flair!r}")
+
+    def test_dashboard_renders_rotation_config(self):
+        layout = {"widgets": [], "flair": {"rotate_min": 5, "rotate_what": "all"}}
+        _http(f"{self.base}/api/layout?device=default", method="PUT",
+              token=self.token.token, body=layout)
+        _, _, page = _http(f"{self.base}/", token=self.token.token)
+        self.assertIn('"rotate_min": 5', page)
+        self.assertIn('"rotate_what": "all"', page)
+        # cleanup: restore the stock default layout for other tests
+        _http(f"{self.base}/api/layout?device=default", method="PUT",
+              token=self.token.token, body=layout_mod.DEFAULT_LAYOUT)
 
     def test_dashboard_renders_flair_defaults(self):
         # D29: synthwave on from first boot — a layout without a flair key

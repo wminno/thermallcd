@@ -47,7 +47,14 @@ DEFAULT_FLAIR = {
     "road": False,
     "scanlines": True,
     "enabled": True,
+    # T27 scene rotation (anti-burn-in): minutes between random switches,
+    # 0 = off; what the switch randomizes. Client-side only — the pick is
+    # never written back, so the saved config stays the user's default.
+    "rotate_min": 0,
+    "rotate_what": "scene",
 }
+# T27: what the rotation timer may randomize ("all" = scene+theme+motion)
+FLAIR_ROTATE_WHAT = {"scene", "theme", "motion", "all"}
 
 # T14/D28 burn-in shuffle: minutes between widget permutations on the panel;
 # 0 = off. Stored in the canonical doc (the editor sets it), consumed by the
@@ -101,6 +108,15 @@ def _normalize_flair(flair):
             out[key] = round(max(0.0, min(100.0, float(value))), 1)
         elif key in ("spectrum", "stars", "road", "scanlines", "enabled"):
             out[key] = bool(value)
+        elif key == "rotate_min":
+            if not isinstance(value, (int, float)) or isinstance(value, bool) \
+                    or value < 0:
+                return None, "flair.rotate_min must be a number >= 0"
+            out[key] = int(value)
+        elif key == "rotate_what":
+            if value not in FLAIR_ROTATE_WHAT:
+                return None, f"flair.rotate_what: {value!r} is not one of {sorted(FLAIR_ROTATE_WHAT)}"
+            out[key] = value
         # unknown keys: dropped silently
     return out, None
 
@@ -222,8 +238,21 @@ class LayoutStore:
         _atomic_write(self._canonical(device), layout)
         # a canonical save may have moved widgets: the stored permutation is
         # now stale (wrong slots, possible overlaps) — drop it so the panel
-        # reloads canonical and reshuffles from the new arrangement
+        # reloads canonical and reshuffles from the new arrangement. The
+        # panel persists its permutation at its OWN device key (the page
+        # PUTs ?shuffled=1 with its ?device=), so a default-arrangement
+        # save must also drop every fallback renderer's stale state —
+        # and only theirs: a device with its own canonical file keys to
+        # that, not to the default.
         self.clear_shuffle(device)
+        if device == "default":
+            for path in self.dir.glob("*.shuffle.json"):
+                dev = path.name[: -len(".shuffle.json")]
+                if not self._canonical(dev).exists():
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
         return layout
 
     def shuffle_state(self, device: str) -> dict | None:
@@ -231,7 +260,11 @@ class LayoutStore:
         default's state when the device renders the default layout (T15)."""
         device = self._safe_name(device)
         state = self._shuffle_state(device)
-        if state is None and device != "default":
+        # the fallback only applies while the device actually renders the
+        # default arrangement — with its own canonical file the permutation
+        # keys to that, never to the default's
+        if state is None and device != "default" \
+                and not self._canonical(device).exists():
             state = self._shuffle_state("default")
         return state
 
