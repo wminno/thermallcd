@@ -10,7 +10,51 @@
   <div class="tlcd-big"><span id="pct">&mdash;</span><span class="tlcd-accent-text">%</span></div>
   <div class="tlcd-bar" style="margin: 8px 0"><i id="bar" style="width:0%"></i></div>
   <div id="cores" class="tlcd-dim-text" style="font-size:14px; line-height:1.6"></div>
+  <canvas id="spark" style="display:none; width:100%; height:70px; margin-top:8px"></canvas>
 <script>
+  // T17: the platform bakes the instance's options in as window.TLCD_OPTIONS
+  var view = (window.TLCD_OPTIONS && window.TLCD_OPTIONS.view) || "bars";
+  var coresEl = document.getElementById("cores");
+  var spark = document.getElementById("spark");
+  if (view === "history") {
+    coresEl.style.display = "none";
+    spark.style.display = "block";
+  } else if (view === "summary") {
+    coresEl.style.display = "none";
+  }
+
+  var hist = [];                     // overall %, newest last (2 min @ ~1 Hz)
+  function drawSpark() {
+    var ctx = spark.getContext("2d");
+    var w = spark.clientWidth, h = spark.clientHeight;
+    if (spark.width !== w || spark.height !== h) { spark.width = w; spark.height = h; }
+    ctx.clearRect(0, 0, w, h);
+    if (hist.length < 2) return;
+    var cs = getComputedStyle(document.documentElement);
+    var accent = cs.getPropertyValue("--tlcd-accent").trim() || "#ff2e83";
+    var field = cs.getPropertyValue("--tlcd-line").trim() || "#282043";
+    var x = function (i) { return i / (hist.length - 1) * (w - 1); };
+    var y = function (v) { return h - 1 - v / 100 * (h - 2); };
+    ctx.fillStyle = field;           // 50% guide line
+    ctx.fillRect(0, y(50), w, 1);
+    ctx.beginPath();                 // area fill under the line
+    ctx.moveTo(x(0), h);
+    for (var i = 0; i < hist.length; i++) ctx.lineTo(x(i), y(hist[i]));
+    ctx.lineTo(x(hist.length - 1), h);
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = accent;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    for (var j = 0; j < hist.length; j++) {
+      if (j === 0) ctx.moveTo(x(0), y(hist[0]));
+      else ctx.lineTo(x(j), y(hist[j]));
+    }
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
   window.tlcd.onMetrics(function (state, data) {
     var body = document.body;
     if (state === "stale") return;             // D23: dim + badge, keep last values
@@ -21,11 +65,29 @@
     document.getElementById("pct").textContent = Math.round(data.cpu);
     document.getElementById("bar").style.width = data.cpu + "%";
     var cores = data.cpu_cores || [];
-    var out = [];
-    for (var i = 0; i < cores.length; i++) {
-      out.push("c" + i + " " + (cores[i] == null ? "—" : Math.round(cores[i])));
+    if (view === "bars") {
+      var out = [];
+      for (var i = 0; i < cores.length; i++) {
+        out.push("c" + i + " " + (cores[i] == null ? "—" : Math.round(cores[i])));
+      }
+      coresEl.textContent = out.join(" · ");
+    } else if (view === "summary") {
+      // 30+ cores clutter the panel (T17): one line — count, average, peak
+      var n = 0, sum = 0, peak = null;
+      for (var k = 0; k < cores.length; k++) {
+        if (cores[k] == null) continue;
+        n++; sum += cores[k];
+        if (peak == null || cores[k] > peak) peak = cores[k];
+      }
+      coresEl.textContent = n
+        ? cores.length + " cores · avg " + Math.round(sum / n) +
+          "% · peak " + Math.round(peak) + "%"
+        : "";
+    } else if (view === "history") {
+      hist.push(data.cpu);
+      if (hist.length > 120) hist.shift();
+      drawSpark();
     }
-    document.getElementById("cores").textContent = out.join(" · ");
   });
 </script>
 </body>

@@ -222,11 +222,15 @@ class Handler(BaseHTTPRequestHandler):
             entry = self.server.registry.get(name)
             if entry is None:
                 return self._json(404, {"error": "not found"})
+            # T17: per-instance options ride as opt_<key> params — the frame
+            # doc bakes them in as window.TLCD_OPTIONS
+            opts = {k[4:]: v[0] for k, v in query.items()
+                    if k.startswith("opt_") and len(k) > 4}
             return self._json(200, {
                 "id": name,
                 "title": entry.get("title") or name,
                 "srcdoc": _widget_doc(self.server.registry, name,
-                                      self._token_supplied()),
+                                      self._token_supplied(), opts),
             })
         if route == "/api/layout":
             device = query.get("device", ["default"])[0]
@@ -314,29 +318,57 @@ class Handler(BaseHTTPRequestHandler):
             if entry is None:
                 continue  # absent/malformed widget: the scene shows through (D22/D25)
             slots.append((item, entry))
-            srcdocs.append(_widget_srcdoc(self.server.registry, item["id"], token))
+            srcdocs.append(_widget_srcdoc(self.server.registry, item["id"], token,
+                                          item.get("options")))
         profile = self.server.profiles().get(device) or {}
         page = _render_dashboard(self.server, slots, srcdocs, token, flair,
                                  device, profile)
         return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
 
-def _widget_doc(registry, name: str, token: str) -> str:
+_WID_BAD = '&="\'\\[]'
+
+
+def _wid_escape(s: str) -> str:
+    """Escape the characters that would break the client's querySelector or
+    the k=v wid format. Mirrored by widEscape() in dashboard.html — the wid
+    is only a DOM lookup key, so both sides must agree byte for byte."""
+    return "".join("%{:02x}".format(ord(c)) if c in _WID_BAD else c
+                   for c in s)
+
+
+def _wid(item_id: str, options: dict | None) -> str:
+    """Frame identity (T17): the widget id, suffixed with its per-instance
+    options so an options change is a NEW frame — the client drops and
+    refetches it through the same path as a newly placed widget. The server
+    render, the shuffle engine and the editor preview must build this
+    identically; nothing parses it back apart."""
+    if not options:
+        return item_id
+    return item_id + "@" + "&".join(
+        f"{_wid_escape(k)}={_wid_escape(options[k])}"
+        for k in sorted(options))
+
+
+def _widget_doc(registry, name: str, token: str,
+                options: dict | None = None) -> str:
     """Widget index.html with the auth token injected (raw, JSON-safe)."""
     path = registry.widget_file(name, "index.html")
     doc = path.read_text(encoding="utf-8") if path else (
         "<!doctype html><body><div class='tlcd-title'>%s</div>"
         "widget files missing</body>" % html.escape(name))
-    inject = f'<script>window.TLCD_TOKEN={json.dumps(token)};</script>'
+    inject = (f'<script>window.TLCD_TOKEN={json.dumps(token)};'
+              f'window.TLCD_OPTIONS={json.dumps(options or {})};</script>')
     if "</head>" in doc.lower():
         idx = doc.lower().index("</head>")
         return doc[:idx] + inject + doc[idx:]
     return inject + doc
 
 
-def _widget_srcdoc(registry, name: str, token: str) -> str:
+def _widget_srcdoc(registry, name: str, token: str,
+                   options: dict | None = None) -> str:
     """_widget_doc html-escaped for a srcdoc attribute."""
-    return html.escape(_widget_doc(registry, name, token), quote=True)
+    return html.escape(_widget_doc(registry, name, token, options), quote=True)
 
 
 def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
@@ -354,15 +386,17 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
     for (item, entry), srcdoc in zip(slots, srcdocs):
         col = f"grid-column: {item['x'] + 1} / span {item['w']};"
         row = f"grid-row: {item['y'] + 1} / span {item['h']};"
+        wid = _wid(item["id"], item.get("options"))
         frames.append(
-            f'<iframe class="widget" data-wid="{html.escape(item["id"])}" '
+            f'<iframe class="widget" data-wid="{html.escape(wid, quote=True)}" '
             f'style="{col} {row}" srcdoc="{srcdoc}" '
             f'title="{html.escape(entry.get("title") or item["id"])}"></iframe>')
     # the effective arrangement (canonical or the D28 shuffle state): the
     # shuffle engine permutes from what is actually rendered, not from the
     # canonical doc the layout API serves
     placed = [{"id": item["id"], "x": item["x"], "y": item["y"],
-               "w": item["w"], "h": item["h"]} for (item, _e) in slots]
+               "w": item["w"], "h": item["h"],
+               "options": item.get("options")} for (item, _e) in slots]
     # T15: the panel profile sizes the canvas; unknown/absent -> 9.16" default
     w = int((profile or {}).get("w") or 1920)
     h = int((profile or {}).get("h") or 462)

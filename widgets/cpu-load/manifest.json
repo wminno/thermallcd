@@ -4,5 +4,13 @@
   "description": "Overall and per-core CPU usage.",
   "size": { "w": 3, "h": 2 },
   "resize": "free",
-  "min": { "w": 2, "h": 1 }
+  "min": { "w": 2, "h": 1 },
+  "options": [
+    { "key": "view", "label": "View", "type": "select",
+      "choices": [
+        { "value": "bars", "label": "Per-core bars" },
+        { "value": "summary", "label": "Summarize all cores" },
+        { "value": "history", "label": "History graph" }
+      ] }
+  ]
 }

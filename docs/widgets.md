@@ -71,6 +71,29 @@ platform injects the auth token into your `<head>` as
 it at call time (it is injected after your `<script>` tags on srcdoc
 reloads). The `boot.js` helper already handles this for metrics.
 
+## View options (per-instance, T17)
+
+A widget can declare options the editor offers when a placed instance is
+selected — view variants, a command, anything the instance needs:
+
+```json
+"options": [
+  { "key": "view", "label": "View", "type": "select",
+    "choices": [
+      { "value": "bars", "label": "Per-core bars" },
+      { "value": "history", "label": "History graph" }
+    ] }
+]
+```
+
+Two field types: `"select"` (a fixed choice list) and `"text"` (free text,
+for a command or a location). Values are per-instance: two placements of
+the same widget can differ. The platform injects the instance's chosen
+values into your iframe as `window.TLCD_OPTIONS` (a plain object, `{}`
+when unset) — read them at boot: they are baked into the frame and never
+change while it runs (changing an option in the editor swaps the frame).
+An unset value means your widget's own default.
+
 ## Theme tokens (D32)
 
 Link `<link rel="stylesheet" href="/widgets/theme.css">` and consume only

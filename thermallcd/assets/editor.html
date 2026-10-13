@@ -115,6 +115,22 @@
     border: 1px solid var(--tlcd-line); border-radius: 4px;
     font: inherit; font-size: 15px; cursor: pointer;
   }
+  /* T17: per-widget view options, offered while the widget is selected */
+  .tlcd-opts {
+    position: absolute; right: 2px; top: 52px; z-index: 10;
+    background: rgba(7, 6, 13, .88); border: 1px solid var(--tlcd-line);
+    border-radius: 4px; padding: 6px 8px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .tlcd-opts label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--tlcd-dim); white-space: nowrap;
+  }
+  .tlcd-opts select, .tlcd-opts input {
+    font: inherit; font-size: 11px; color: var(--tlcd-text);
+    background: var(--tlcd-field); border: 1px solid var(--tlcd-line);
+    border-radius: 3px; padding: 2px 4px; max-width: 180px;
+  }
   #toast {
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
     background: var(--tlcd-surface-2); color: var(--tlcd-text);
@@ -205,6 +221,10 @@ var grid = GridStack.init({
 
 var hist = [], ptr = -1, baselinePtr = -1, loading = false;
 var selected = null;
+// T17 per-instance options: keyed by the grid item element (gridstack nodes
+// never carry custom fields reliably across load/undo) — nodes() joins them
+// back in by element, applyHistory rebuilds the map after grid.load
+var itemOptions = new Map();
 var widgetsByName = {};
 
 var paletteBtns = {};   // widget name -> palette button (disabled once placed)
@@ -217,9 +237,13 @@ var toast = document.getElementById("toast");
 function nodes() {
   // read the live nodes, not grid.save(): optimized save output omits w/h
   // when they hit defaults (h = 1, w reaching the last column), and the
-  // server rejects layouts without integer w/h
+  // server rejects layouts without integer w/h. Per-instance options (T17)
+  // live in itemOptions — gridstack nodes never carry them.
   return grid.engine.nodes.map(function (n) {
-    return { id: n.id, x: n.x, y: n.y, w: n.w, h: n.h };
+    return {
+      id: n.id, x: n.x, y: n.y, w: n.w, h: n.h,
+      options: itemOptions.get(n.el) || undefined
+    };
   });
 }
 
@@ -275,7 +299,21 @@ function snapshot() {
 function applyHistory(nextPtr) {
   loading = true;
   var h = JSON.parse(hist[nextPtr]);
-  grid.load(h.widgets);
+  // gridstack nodes don't carry custom fields through load() — strip them
+  // for the load, then re-key the options map onto the fresh elements
+  grid.load(h.widgets.map(function (w) {
+    var n = Object.assign({}, w);
+    delete n.options;
+    return n;
+  }));
+  itemOptions.clear();
+  h.widgets.forEach(function (w) {
+    if (w.options && Object.keys(w.options).length) {
+      grid.engine.nodes.forEach(function (n) {
+        if (n.id === w.id) itemOptions.set(n.el, w.options);
+      });
+    }
+  });
   pendingShuffle.interval_min = h.shuffle;
   if (shuffleEls.interval) shuffleEls.interval.value = h.shuffle;
   loading = false;
@@ -308,6 +346,9 @@ function markDirty() { updateChrome(); }
 grid.on("change", function () { snapshot(); });
 grid.on("added", function () { snapshot(); });     // palette drag-in drop
 grid.on("removed", function () { snapshot(); });  // deletions may not fire change
+grid.on("removed", function (ns) {
+  ns.forEach(function (n) { itemOptions.delete(n.el); });   // T17 hygiene
+});
 
 // -- selection + delete (D31: click-to-select, delete button on the card) --
 function deselect() {
@@ -315,6 +356,8 @@ function deselect() {
     selected.el.classList.remove("tlcd-selected");
     var del = selected.el.querySelector(".tlcd-del");
     if (del) del.remove();
+    var opts = selected.el.querySelector(".tlcd-opts");
+    if (opts) opts.remove();
   }
   selected = null;
 }
@@ -330,6 +373,51 @@ function select(itemEl) {
   b.addEventListener("mousedown", function (e) { e.stopPropagation(); });
   b.addEventListener("click", function () { grid.removeWidget(itemEl); });
   itemEl.querySelector(".grid-stack-item-content").appendChild(b);
+  // T17: the widget's manifest options render as a small popover; a change
+  // rewrites the instance's options and the preview refetches the frame
+  var node = null;
+  grid.engine.nodes.forEach(function (n) { if (n.el === itemEl) node = n; });
+  var specs = (node && widgetsByName[node.id] &&
+               widgetsByName[node.id].options) || [];
+  if (specs.length) {
+    var box = document.createElement("div");
+    box.className = "tlcd-opts";
+    specs.forEach(function (spec) {
+      var lab = document.createElement("label");
+      lab.textContent = spec.label || spec.key;
+      var ctl;
+      if (spec.type === "text") {
+        ctl = document.createElement("input");
+        ctl.type = "text";
+        ctl.placeholder = "default";
+      } else {
+        ctl = document.createElement("select");
+        var empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = "(default)";
+        ctl.appendChild(empty);
+        (spec.choices || []).forEach(function (ch) {
+          var o = document.createElement("option");
+          o.value = ch.value;
+          o.textContent = ch.label || ch.value;
+          ctl.appendChild(o);
+        });
+      }
+      var cur = (itemOptions.get(itemEl) || {})[spec.key];
+      if (cur != null) ctl.value = cur;
+      ctl.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+      ctl.addEventListener("change", function () {
+        var opts = Object.assign({}, itemOptions.get(itemEl) || {});
+        if (ctl.value === "") delete opts[spec.key];
+        else opts[spec.key] = ctl.value;
+        itemOptions.set(itemEl, opts);
+        snapshot();   // rides undo/redo history; pushPreview refetches the frame
+      });
+      lab.appendChild(ctl);
+      box.appendChild(lab);
+    });
+    itemEl.querySelector(".grid-stack-item-content").appendChild(box);
+  }
   selected = { el: itemEl };
 }
 gridEl.addEventListener("click", function (e) {
@@ -455,6 +543,15 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
     if (w && w.min) { node.minW = w.min.w; node.minH = w.min.h; }
     return node;
   }));
+  // T17: re-key saved per-instance options onto the fresh elements
+  itemOptions.clear();
+  doc.widgets.forEach(function (it) {
+    if (it.options && Object.keys(it.options).length) {
+      grid.engine.nodes.forEach(function (n) {
+        if (n.id === it.id) itemOptions.set(n.el, it.options);
+      });
+    }
+  });
   loading = false;
   renderChips();
   snapshot();

@@ -140,6 +140,12 @@ def _validate_layout(layout: dict) -> str | None:
             return f"{item['id']}: origin outside the {GRID_COLS}x{GRID_ROWS} grid"
         if item["x"] + item["w"] > GRID_COLS or item["y"] + item["h"] > GRID_ROWS:
             return f"{item['id']}: extends past the {GRID_COLS}x{GRID_ROWS} grid"
+        if "options" in item:
+            opts = item["options"]
+            if not isinstance(opts, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str)
+                    for k, v in opts.items()):
+                return f"{item['id']}: options must be a dict of string values"
     return None
 
 

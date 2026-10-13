@@ -115,10 +115,29 @@
   // page into the stored permutation: TLCD_WIDGETS is the effective
   // arrangement, so each shuffle builds on the last. Skipped embedded —
   // the editor canvas must show canonical under its drag handles.
+  // T17 frame identity: the widget id suffixed with its per-instance
+  // options, so an options change is a NEW frame (drop + refetch) while an
+  // untouched widget keeps its frame. Mirrors _wid() in dashboard.py byte
+  // for byte — including the escape set — or frames never match.
+  function widEscape(s) {
+    return String(s).replace(/[&="'\\\[\]]/g, function (c) {
+      var h = c.charCodeAt(0).toString(16);
+      return "%" + (h.length < 2 ? "0" : "") + h;
+    });
+  }
+  function wid(w) {
+    var o = w.options || {};
+    var keys = Object.keys(o).sort();
+    if (!keys.length) return w.id;
+    return w.id + "@" + keys.map(function (k) {
+      return widEscape(k) + "=" + widEscape(o[k]);
+    }).join("&");
+  }
+
   (function () {
     if (window.parent !== window) return;
     var cur = (window.TLCD_WIDGETS || []).map(function (w) {
-      return { id: w.id, x: w.x, y: w.y, w: w.w, h: w.h };
+      return { id: w.id, x: w.x, y: w.y, w: w.w, h: w.h, options: w.options };
     });
     var timer = null;
 
@@ -160,12 +179,12 @@
       // cur inside the callback would POST the pre-permutation layout
       var next = cur.map(function (w) {
         var p = placed[w.id];
-        return { id: w.id, x: p.x, y: p.y, w: w.w, h: w.h };
+        return { id: w.id, x: p.x, y: p.y, w: w.w, h: w.h, options: w.options };
       });
       crossfadeSwap(function () {
         var grid = document.querySelector(".grid");
         next.forEach(function (w) {
-          var f = grid.querySelector('iframe[data-wid="' + w.id + '"]');
+          var f = grid.querySelector('iframe[data-wid="' + wid(w) + '"]');
           if (f) {
             f.style.gridColumn = (w.x + 1) + " / span " + w.w;
             f.style.gridRow = (w.y + 1) + " / span " + w.h;
@@ -255,18 +274,25 @@
       if (seenWid[id]) { f.remove(); return; }
       seenWid[id] = true;
     });
-    widgets.forEach(function (w) { latest[w.id] = w; });
     widgets.forEach(function (w) {
-      keep[w.id] = true;
+      var key = wid(w);
+      latest[key] = w;
+      keep[key] = true;
       var col = (w.x + 1) + " / span " + w.w;
       var row = (w.y + 1) + " / span " + w.h;
-      var f = grid.querySelector('iframe[data-wid="' + w.id + '"]');
+      var f = grid.querySelector('iframe[data-wid="' + key + '"]');
       if (f) {
         f.style.gridColumn = col;
         f.style.gridRow = row;
         return;
       }
-      fetch("/api/frame?id=" + encodeURIComponent(w.id) +
+      // per-instance options ride as opt_<key> params (T17): the frame doc
+      // bakes them in as window.TLCD_OPTIONS
+      var q = Object.keys(w.options || {}).sort().map(function (k) {
+        return "&opt_" + encodeURIComponent(k) + "=" +
+               encodeURIComponent(w.options[k]);
+      }).join("");
+      fetch("/api/frame?id=" + encodeURIComponent(w.id) + q +
             "&token=" + encodeURIComponent(window.TLCD_TOKEN))
         .then(function (r) { return r.json(); })
         .then(function (doc) {
@@ -275,11 +301,11 @@
           // the newest push may add, and only if no frame exists yet — a
           // leftover duplicate would freeze at its old slot and look like
           // the widgets swapped places
-          if (!doc.srcdoc || latest[w.id] !== w) return;
-          if (grid.querySelector('iframe[data-wid="' + w.id + '"]')) return;
+          if (!doc.srcdoc || latest[key] !== w) return;
+          if (grid.querySelector('iframe[data-wid="' + key + '"]')) return;
           var nf = document.createElement("iframe");
           nf.className = "widget";
-          nf.setAttribute("data-wid", w.id);
+          nf.setAttribute("data-wid", key);
           nf.style.gridColumn = col;
           nf.style.gridRow = row;
           nf.title = doc.title || w.id;

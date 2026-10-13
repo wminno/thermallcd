@@ -64,6 +64,19 @@ class PlatformTestBase(unittest.TestCase):
         (widgets / "w-srcbad" / "manifest.json").write_text(json.dumps({
             "name": "w-srcbad", "size": {"w": 1, "h": 1}, "source": "bogus"}))
         (widgets / "w-srcbad" / "index.html").write_text("<html><body>src</body></html>")
+        (widgets / "w-opts").mkdir()
+        (widgets / "w-opts" / "manifest.json").write_text(json.dumps({
+            "name": "w-opts", "title": "OPTS", "size": {"w": 2, "h": 1},
+            "options": [{"key": "view", "label": "View", "type": "select",
+                         "choices": [{"value": "bars", "label": "Bars"},
+                                     {"value": "history", "label": "History"}]}]}))
+        (widgets / "w-opts" / "index.html").write_text(
+            "<!doctype html><html><head><title>o</title></head><body>ok</body></html>")
+        (widgets / "w-optsbad").mkdir()
+        (widgets / "w-optsbad" / "manifest.json").write_text(json.dumps({
+            "name": "w-optsbad", "size": {"w": 1, "h": 1},
+            "options": [{"key": "view", "type": "select"}]}))
+        (widgets / "w-optsbad" / "index.html").write_text("<html><body>o</body></html>")
         (widgets / "theme.css").write_text(":root { --tlcd-accent: #ff2e83; }")
 
         cls.token = dash.TokenStore(root / "data")
@@ -200,6 +213,36 @@ class TestRegistry(PlatformTestBase):
         self.assertIn("TLCD_WIDGETS", body)          # T14: effective arrangement
                                                      # for the shuffle engine
 
+    def test_view_options_schema_and_frame_injection(self):
+        # T17: manifest options validate; per-instance values reach the
+        # widget doc as window.TLCD_OPTIONS and key the frame identity
+        status, _, body = _http(f"{self.base}/api/widgets", token=self.token.token)
+        by_name = {w["name"]: w for w in body["widgets"]}
+        self.assertEqual(by_name["w-opts"]["options"][0]["key"], "view")
+        self.assertIn("options", by_name["w-optsbad"]["error"])
+        status, _, body = _http(
+            f"{self.base}/api/frame?id=w-opts&opt_view=history",
+            token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertIn('window.TLCD_OPTIONS={"view": "history"}', body["srcdoc"])
+        # no opt_ params -> empty options object
+        status, _, body = _http(f"{self.base}/api/frame?id=w-opts",
+                                token=self.token.token)
+        self.assertIn("window.TLCD_OPTIONS={}", body["srcdoc"])
+
+    def test_wid_builds_frame_identity(self):
+        # the wid string is a DOM lookup key shared by the server render and
+        # the client: id alone, id@sorted-kv with options, escapes for the
+        # characters that would break the client's querySelector
+        self.assertEqual(dash._wid("cpu-load", None), "cpu-load")
+        self.assertEqual(dash._wid("cpu-load", {}),
+                         "cpu-load")
+        self.assertEqual(dash._wid("cpu-load", {"view": "history"}),
+                         "cpu-load@view=history")
+        self.assertEqual(dash._wid("w", {"b": "1", "a": "2"}), "w@a=2&b=1")
+        self.assertEqual(dash._wid("tty", {"cmd": 'watch "x"&y'}),
+                         "tty@cmd=watch %22x%22%26y")
+
 
 class TestLayoutStore(PlatformTestBase):
     def test_round_trip(self):
@@ -213,6 +256,15 @@ class TestLayoutStore(PlatformTestBase):
         bad = {"widgets": [{"id": "x", "x": 11, "y": 0, "w": 4, "h": 1}]}
         with self.assertRaises(ValueError):
             self.store.save("dev1", bad)
+
+    def test_items_may_carry_per_instance_options(self):
+        # T17: options ride the layout item, structure-validated only
+        self.assertIsNone(layout_mod._validate_layout({"widgets": [
+            {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
+             "options": {"view": "history"}}]}))
+        self.assertIn("options", layout_mod._validate_layout({"widgets": [
+            {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
+             "options": {"view": 5}}]}))
 
     def test_shuffle_never_touches_canonical(self):
         canonical = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}

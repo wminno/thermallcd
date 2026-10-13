@@ -12,6 +12,54 @@ GRID_COLS = 12
 GRID_ROWS = 3
 RESIZE_MODES = ("free", "fixed")
 SOURCE_MODES = ("html", "image")
+OPTION_TYPES = ("select", "text")
+
+
+def _validate_options(raw, errors):
+    """Per-instance options (T17): fields the editor offers when the widget
+    is selected; values ride the layout item and reach the widget as
+    window.TLCD_OPTIONS. Structural validation only — the editor constrains
+    values to the manifest's choices."""
+    if not isinstance(raw, list):
+        errors.append("manifest.options must be a list")
+        return None
+    out, seen = [], set()
+    for spec in raw:
+        if not isinstance(spec, dict) or not isinstance(spec.get("key"), str) \
+                or not spec["key"]:
+            errors.append("each manifest.options entry needs a non-empty key string")
+            return None
+        key = spec["key"]
+        if key in seen:
+            errors.append(f"manifest.options key {key!r} appears twice")
+            return None
+        seen.add(key)
+        typ = spec.get("type", "select")
+        if typ not in OPTION_TYPES:
+            errors.append(f"options.{key}: type {typ!r} unknown "
+                          f"(expected one of {OPTION_TYPES})")
+            return None
+        entry = {"key": key, "type": typ, "label": spec.get("label", key)}
+        if typ == "select":
+            choices = spec.get("choices")
+            if not isinstance(choices, list) or not choices:
+                errors.append(f"options.{key}: select needs a non-empty choices list")
+                return None
+            norm, vals = [], set()
+            for ch in choices:
+                if not isinstance(ch, dict) or not isinstance(ch.get("value"), str) \
+                        or not ch["value"]:
+                    errors.append(f"options.{key}: each choice needs a value string")
+                    return None
+                if ch["value"] in vals:
+                    errors.append(f"options.{key}: choice {ch['value']!r} appears twice")
+                    return None
+                vals.add(ch["value"])
+                norm.append({"value": ch["value"],
+                             "label": ch.get("label", ch["value"])})
+            entry["choices"] = norm
+        out.append(entry)
+    return out
 
 
 def _validate_size(raw, what, errors):
@@ -58,6 +106,10 @@ def validate_manifest(directory: Path, manifest: dict) -> dict:
     if "min" in manifest:
         min_size = _validate_size(manifest["min"], "manifest.min", errors)
 
+    options = None
+    if "options" in manifest:
+        options = _validate_options(manifest["options"], errors)
+
     entry = {
         "name": name if isinstance(name, str) else directory.name,
         "title": manifest.get("title", name),
@@ -66,6 +118,7 @@ def validate_manifest(directory: Path, manifest: dict) -> dict:
         "resize": resize,
         "min": min_size,
         "source": source,
+        "options": options,
     }
     if errors:
         entry["error"] = "; ".join(errors)
