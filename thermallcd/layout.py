@@ -33,8 +33,7 @@ GRID_ROWS = 3
 # T13 flair: the background scene layer config, stored alongside the widgets.
 # Synthwave is on from first boot (D29): a layout without a flair key renders
 # DEFAULT_FLAIR; the editor saves the merged object from its first save on.
-FLAIR_SCENES = {"sunset", "grid", "ridge", "city", "twin", "valley",
-                "canyon", "mesa"}
+FLAIR_SCENES = {"sunset", "grid", "ridge", "city", "twin", "mesa"}
 FLAIR_THEMES = {"synthwave", "vaporwave", "outrun", "miami", "cyber", "noir"}
 FLAIR_MOTIONS = {"left", "right", "forward", "backward", "none"}
 DEFAULT_FLAIR = {

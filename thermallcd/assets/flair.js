@@ -65,12 +65,6 @@ var SCENES = {
   twin:{ label:"Twin Suns",
     sun:[{r:.19, yf:.5, x:-.16}, {r:.115, yf:.85, x:.21}],
     mts:[M(.05,.0021,.045,.14,6.1)] },
-  valley:{ label:"Side Ranges", motions:["forward","backward","none"],
-    sun:[{r:.20, yf:.5, x:0}], mts:[],
-    terrain:{amp:2.6, seed:3.7, gap:4, fade:1.0} },
-  canyon:{ label:"Deep Canyon", motions:["forward","backward","none"],
-    sun:[{r:.16, yf:.75, x:0}], mts:[],
-    terrain:{amp:3.6, seed:6.4, gap:3, fade:0.9} },
   mesa:{ label:"Mesa Vista", motions:["forward","backward","none"],
     sun:[{r:.19, yf:.6, x:0}], mts:[],
     sides:[{par:.05, freq:.0024, base:.10, amp:.24, seed:11.6, gap:.32, shape:"mesa"},
@@ -102,13 +96,6 @@ function noise1(x){
   return hash(i) * (1 - u) + hash(i + 1) * u;
 }
 function fbm(x){ return noise1(x) * .55 + noise1(x * 2.31 + 7.3) * .28 + noise1(x * 4.73 + 13.1) * .17; }
-function hash2(x, y){ const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
-function noise2(x, y){
-  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
-  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
-  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
-}
 function hexRGB(h){ const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
 function hexA(h, a){ const c = hexRGB(h); return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
 function shade(h, f){ const c = hexRGB(h); return "rgb(" + (c[0]*f|0) + "," + (c[1]*f|0) + "," + (c[2]*f|0) + ")"; }
@@ -344,127 +331,6 @@ function drawRoad(th, hor){
   ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 }
 
-/* ============ terrain mesh (Side Ranges / Deep Canyon), ported verbatim ============ */
-
-function drawTerrain(T, th, hor){
-  const cx = W / 2, K = (H - hor) * 1.75;
-  const gap = T.gap, fade = T.fade, amp = T.amp * K, seed = T.seed;
-  const zFar = 15;
-  const hAt = (u, wz) => {
-    const n = noise2(u * .24 + seed, wz * .24 + seed * 1.7) * .75 +
-              noise2(u * .57 + seed * 2.3, wz * .57 + seed * 3.9) * .25;
-    const h = Math.pow(n, 1.4) * amp;
-    const m = Math.max(0, Math.min(1, (Math.abs(u - camX) - gap) / fade));
-    return h * (m * m * (3 - 2 * m));
-  };
-  ctx.strokeStyle = th.grid; ctx.shadowColor = th.grid;
-  const px = (u, z) => cx + (u - camX) * (W / 7) / z;
-  const py = (h, z) => hor + (K - h) / z;
-  const gf = grads(th).terrain;
-  const span = cx * zFar / (W / 7) + 1;
-  const cols = [];
-  for (let i = Math.ceil((camX - span) * 2) / 2; i <= Math.floor((camX + span) * 2) / 2; i += .5)
-    if (Math.abs(i - camX) >= gap) cols.push(i);
-  cols.push(camX - gap, camX + gap);
-  cols.sort((p, q) => p - q);
-  const NROW = 28, r0 = Math.floor(camZ) + zFar - 1;
-  const hbuf = new Float32Array(cols.length * NROW);
-  for (let c = 0; c < cols.length; c++)
-    for (let r = 0; r < NROW; r++)
-      hbuf[c * NROW + r] = hAt(cols[c], r0 - r * .5);
-  const hc = (c, n) => hbuf[c * NROW + Math.round((r0 - n) * 2)];
-  const vis = [];
-  for (let n = r0; n >= Math.floor(camZ) + 1; n -= .5){
-    const z = n - camZ, ground = hor + K / z;
-    const a = Math.max(0, (zFar - z) / (zFar - 2));
-    if (a <= 0) continue;
-    const runs = [];
-    let run = [];
-    const flush = () => {
-      if (run.length > 1) runs.push(run);
-      run = [];
-    };
-    for (let sx = 0; sx <= W + 5; sx += 5){
-      const u = camX + (sx - cx) * z / (W / 7);
-      if (Math.abs(u - camX) < gap){ flush(); continue; }
-      const h = hAt(u, n);
-      if (h / z < 2){ flush(); continue; }
-      run.push([px(u, z), py(h, z)]);
-    }
-    flush();
-    if (runs.length){
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = gf;
-      ctx.beginPath();
-      for (const r of runs){
-        ctx.moveTo(r[0][0], ground);
-        for (const [x, y] of r) ctx.lineTo(x, y);
-        ctx.lineTo(r[r.length - 1][0], ground);
-        ctx.closePath();
-      }
-      ctx.fill();
-      ctx.globalAlpha = .9 * a; ctx.lineWidth = 1.2;
-      ctx.shadowBlur = 9 * a >= 1.5 ? 9 * a : 0;
-      ctx.beginPath();
-      for (const r of runs){
-        ctx.moveTo(r[0][0], r[0][1]);
-        for (const [x, y] of r) ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-    const z2 = Math.max((n - .5) - camZ, .7);
-    if (z2 >= .7){
-      const ground2 = hor + K / z2;
-      ctx.shadowBlur = 0;
-      vis.length = 0;
-      for (let c = 0; c < cols.length; c++){
-        const x = px(cols[c], z);
-        if (x > -40 && x < W + 40) vis.push(c);
-      }
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = gf;
-      ctx.beginPath();
-      for (const c of vis){
-        const i = cols[c], h1 = hc(c, n), h2 = hc(c, n - .5);
-        if (h1 / z < 2 && h2 / z2 < 2) continue;
-        ctx.moveTo(px(i, z), py(h1, z));
-        ctx.lineTo(px(i, z2), py(h2, z2));
-        ctx.lineTo(px(i, z2), ground2);
-        ctx.lineTo(px(i, z), ground);
-        ctx.closePath();
-      }
-      ctx.fill();
-      ctx.fillStyle = gf;
-      ctx.beginPath();
-      for (let v = 0; v < vis.length - 1; v++){
-        const c = vis[v], cn = vis[v + 1];
-        if (cn !== c + 1) continue;
-        const u1 = cols[c], u2 = cols[cn];
-        if ((u1 - camX) * (u2 - camX) < 0) continue;
-        const h11 = hc(c, n), h12 = hc(cn, n);
-        const h21 = hc(c, n - .5), h22 = hc(cn, n - .5);
-        if (h11 < 2 * z && h12 < 2 * z && h21 < 2 * z2 && h22 < 2 * z2) continue;
-        ctx.moveTo(px(u1, z), py(h11, z));
-        ctx.lineTo(px(u2, z), py(h12, z));
-        ctx.lineTo(px(u2, z2), py(h22, z2));
-        ctx.lineTo(px(u1, z2), py(h21, z2));
-        ctx.closePath();
-      }
-      ctx.fill();
-      ctx.globalAlpha = .5 * a; ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (const c of vis){
-        const i = cols[c], h1 = hc(c, n), h2 = hc(c, n - .5);
-        if (h1 / z < 2 && h2 / z2 < 2) continue;
-        ctx.moveTo(px(i, z), py(h1, z));
-        ctx.lineTo(px(i, z2), py(h2, z2));
-      }
-      ctx.stroke();
-    }
-  }
-  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
-}
-
 /* ============ spectrum: the scene pulses with your server ============
    Not audio — /api/metrics drives the bands (cpu + gpu load). Bars slew
    toward their target each tick (fast rise, slow fall) so sampling reads
@@ -615,7 +481,6 @@ function render(){
 
   ctx.fillStyle = GR.haze; ctx.fillRect(0, hor, W, H * .16);
 
-  if (sc.terrain) drawTerrain(sc.terrain, th, hor);
 
   sc.mts.forEach((L, i) => drawRidge(L, i === 0 ? th.mFar : th.mNear, hor, W / 7));
   (sc.sides || []).forEach((L, i) => drawRidge(L, i === 0 ? th.mFar : th.mNear, hor, W / 7));
