@@ -195,12 +195,19 @@
       // persist the arrangement: the next boot renders it server-side, and
       // the editor's "last shuffled" note reads the stored timestamp.
       // Device-scoped (T15): the shuffle belongs to THIS panel.
+      // surface persistence failures: a silent rejection here hid T29 —
+      // the state PUT 400'd on null-valued options and the panel looked
+      // like it never shuffled
       fetch("/api/layout?device=" + encodeURIComponent(window.TLCD_DEVICE) +
             "&shuffled=1&token=" + encodeURIComponent(window.TLCD_TOKEN), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ widgets: next }),
-      }).catch(function () {});
+      }).then(function (r) {
+        if (!r.ok) console.warn("shuffle persist failed:", r.status);
+      }).catch(function (e) {
+        console.warn("shuffle persist failed:", e);
+      });
     }
 
     // the poll feeds every layout response here; the timer is idempotent

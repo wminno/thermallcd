@@ -404,9 +404,16 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
     # the effective arrangement (canonical or the D28 shuffle state): the
     # shuffle engine permutes from what is actually rendered, not from the
     # canonical doc the layout API serves
-    placed = [{"id": item["id"], "x": item["x"], "y": item["y"],
-               "w": item["w"], "h": item["h"],
-               "options": item.get("options")} for (item, _e) in slots]
+    # options ride only when set: a baked null echoes into the shuffle
+    # engine's state PUT and the layout validator rejects null-valued
+    # option dicts, so persistence silently 400s (T29)
+    placed = []
+    for (item, _e) in slots:
+        w = {"id": item["id"], "x": item["x"], "y": item["y"],
+             "w": item["w"], "h": item["h"]}
+        if item.get("options") is not None:
+            w["options"] = item["options"]
+        placed.append(w)
     # T15: the panel profile sizes the canvas; unknown/absent -> 9.16" default
     w = int((profile or {}).get("w") or 1920)
     h = int((profile or {}).get("h") or 462)

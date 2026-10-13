@@ -274,6 +274,31 @@ class TestLayoutStore(PlatformTestBase):
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
              "options": {"view": "history"}}]}))
 
+    def test_null_options_pass_validation(self):
+        # T29: the panel render bakes "options": null for optionless
+        # widgets; the shuffle engine echoes that shape into its state PUT,
+        # so a null-valued key must validate like an absent key
+        self.assertIsNone(layout_mod._validate_layout({"widgets": [
+            {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1, "options": None}]}))
+
+    def test_shuffle_state_accepts_null_options(self):
+        # the exact body shape the dashboard engine PUTs after permuting
+        # (T29): a 400 here left the shuffle state unwritten, so every
+        # reload booted canonical and burn-in never engaged
+        canonical = {"widgets": [
+            {"id": "a", "x": 0, "y": 0, "w": 2, "h": 1, "options": None},
+            {"id": "b", "x": 2, "y": 0, "w": 2, "h": 1, "options": None},
+        ]}
+        self.store.save("dev9", canonical)
+        permuted = {"widgets": [
+            {"id": "a", "x": 2, "y": 0, "w": 2, "h": 1, "options": None},
+            {"id": "b", "x": 0, "y": 0, "w": 2, "h": 1, "options": None},
+        ]}
+        self.store.save("dev9", permuted, shuffled=True)
+        state = self.store.shuffle_state("dev9")
+        self.assertTrue(state["shuffled"])
+        self.assertEqual(state["widgets"], permuted["widgets"])
+
 
 class TestTtySource(PlatformTestBase):
     # T18: the pane derives entirely from the layout's tty item — the
