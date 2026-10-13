@@ -598,5 +598,63 @@ class TestMemSwap(unittest.TestCase):
         self.assertNotIn("swap", data["mem"])
 
 
+class TestLlmTasks(unittest.TestCase):
+    """T26: the llm-tasks source — loaded models plus LLM workers."""
+
+    def test_parse_models_keeps_only_loaded(self):
+        doc = {"data": [
+            {"id": "qwen-38b-unc-flash", "status": {"value": "loaded"}},
+            {"id": "gemma-4", "status": {"value": "unloaded"}},
+            {"id": "no-status"},
+            {"id": "weird-status", "status": "loaded"},   # not a dict: skip
+            {"status": {"value": "loaded"}},               # no id: skip
+            "garbage",
+        ]}
+        self.assertEqual(dash.metrics_mod._parse_models(doc),
+                         ["qwen-38b-unc-flash"])
+        self.assertEqual(dash.metrics_mod._parse_models(None), [])
+        self.assertEqual(dash.metrics_mod._parse_models({}), [])
+
+    def test_loaded_models_down_swap_yields_empty(self):
+        # closed port: the source is simply not there, never faked (D23)
+        self.assertEqual(
+            dash.metrics_mod._loaded_models("http://127.0.0.1:1/v1/models"),
+            [])
+
+    def test_llm_processes_scan_fake_proc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            for pid, argv, rss, threads in (
+                ("2000", b"/opt/swap/llama-server\0--port 11012\0--model x.gguf\0",
+                 "21159600 kB", "38"),
+                ("2001", b"bash\0-c\0llama-server --port 1\0", "0", "1"),
+                ("2002", b"", "0", "0"),  # zombie: empty cmdline, skip
+            ):
+                d = proc / pid
+                d.mkdir()
+                (d / "cmdline").write_bytes(argv)
+                (d / "status").write_bytes(
+                    f"VmRSS:\t{rss}\nThreads:\t{threads}\n".encode())
+            tasks = dash.metrics_mod._llm_processes(root=str(proc))
+        self.assertEqual(len(tasks), 1)  # bash's argv[0] is not a worker
+        self.assertEqual(tasks[0]["id"], "2000")
+        self.assertEqual(tasks[0]["name"], "llama-server")
+        self.assertEqual(tasks[0]["status"], "20.2G · 38 thr")
+
+    def test_sample_wires_llm_tasks(self):
+        sampler = dash.metrics_mod.MetricsSampler(interval=0.05)
+        with mock.patch.object(dash.metrics_mod, "_loaded_models",
+                               return_value=["qwen-38b-unc-flash"]), \
+             mock.patch.object(dash.metrics_mod, "_llm_processes",
+                               return_value=[{"id": "77", "name": "llama-server",
+                                              "status": "20.2G · 38 thr"}]):
+            data = sampler._sample_once()
+        self.assertEqual(data["llm_tasks"], [
+            {"id": "qwen-38b-unc-flash", "name": "qwen-38b-unc-flash",
+             "status": "loaded"},
+            {"id": "77", "name": "llama-server", "status": "20.2G · 38 thr"},
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()

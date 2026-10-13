@@ -11,6 +11,8 @@
     &mdash;
   </div>
 <script>
+  // T26: the sampler orders loaded models first, then LLM workers by RSS;
+  // the slot fits three 15px lines, so overflow collapses into a +N line.
   window.tlcd.onMetrics(function (state, data) {
     if (state === "stale") return;             // D23: dim + badge, keep last values
     var tasks = data.llm_tasks;
@@ -20,13 +22,19 @@
       row.textContent = "no active tasks";
       return;
     }
-    var out = [];
-    for (var i = 0; i < tasks.length && i < 3; i++) {
+    row.textContent = "";
+    var shown = tasks.length > 3 ? 2 : tasks.length;
+    for (var i = 0; i < shown; i++) {
       var t = tasks[i] || {};
-      out.push((t.name || t.id || "task") + (t.status ? " · " + t.status : ""));
+      var line = document.createElement("div");
+      line.textContent = (t.name || t.id || "task") + (t.status ? " · " + t.status : "");
+      row.appendChild(line);
     }
-    var extra = tasks.length > 3 ? "  +" + (tasks.length - 3) : "";
-    row.textContent = out.join("  ·  ") + extra;
+    if (tasks.length > 3) {
+      var more = document.createElement("div");
+      more.textContent = "+" + (tasks.length - 2) + " more";
+      row.appendChild(more);
+    }
   });
 </script>
 </body>

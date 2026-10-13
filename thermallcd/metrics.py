@@ -8,10 +8,19 @@ source yet is `null` — never a fabricated zero.
 """
 
 import glob
+import json
 import os
 import shutil
 import threading
 import time
+import urllib.request
+
+# T26: what the llm-tasks widget samples. The llama-swap endpoint provides
+# the loaded-model line; the process scan catches LLM workers started
+# outside it (a bare llama-server, ollama). Env-overridable for other hosts.
+LLM_SWAP_URL = os.environ.get(
+    "THERMALLCD_LLAMA_SWAP_URL", "http://127.0.0.1:8080/v1/models")
+LLM_PROCESS_NAMES = ("llama-server", "ollama", "ollama-runner")
 
 
 def _read_proc_stat():
@@ -69,6 +78,58 @@ def _gpu_sample(card):
         except (OSError, ValueError):
             continue
     return out
+
+
+def _parse_models(doc):
+    """Loaded model ids from a llama-swap /v1/models payload (T26)."""
+    out = []
+    for m in (doc or {}).get("data", []):
+        if not isinstance(m, dict):
+            continue
+        if isinstance(m.get("status"), dict) and m["status"].get("value") == "loaded":
+            out.append(m.get("id") or "")
+    return [m for m in out if m]
+
+
+def _loaded_models(url=None):
+    """Models currently loaded in llama-swap. Best-effort: a down swap or
+    a bad payload yields no model line, never a fake one (D23)."""
+    try:
+        with urllib.request.urlopen(url or LLM_SWAP_URL, timeout=1.0) as resp:
+            return _parse_models(json.loads(resp.read().decode("utf-8")))
+    except Exception:  # any failure: the source is simply not there
+        return []
+
+
+def _llm_processes(root="/proc"):
+    """Running LLM workers (T26): basename match on argv[0], biggest RSS
+    first. CPU% is left out on purpose — the GPU pane already shows whether
+    inference is active; RSS is the "it is sitting in VRAM" number."""
+    found = []
+    for path in glob.glob(os.path.join(root, "[0-9]*/cmdline")):
+        try:
+            with open(path, "rb") as fh:
+                argv = [a for a in fh.read().decode("utf-8", "replace").split("\0") if a]
+            if not argv:
+                continue  # zombie: empty cmdline
+            name = os.path.basename(argv[0])
+            if name not in LLM_PROCESS_NAMES:
+                continue
+            fields = {}
+            with open(os.path.join(os.path.dirname(path), "status")) as fh:
+                for line in fh:
+                    key, _, val = line.partition(":")
+                    fields[key.strip()] = val.strip()
+            rss_kb = int(fields.get("VmRSS", "0").split()[0])
+            threads = int(fields.get("Threads", "0"))
+            found.append((rss_kb, os.path.dirname(path).rsplit("/", 1)[-1],
+                          name, threads))
+        except (OSError, ValueError, IndexError):
+            continue  # raced exit or unreadable entry
+    found.sort(key=lambda row: -row[0])
+    return [{"id": pid, "name": name,
+             "status": f"{rss_kb / 2**20:.1f}G" + (f" · {threads} thr" if threads else "")}
+            for rss_kb, pid, name, threads in found]
 
 
 class MetricsSampler:
@@ -138,7 +199,10 @@ class MetricsSampler:
         except OSError:
             pass
         data["gpu"] = _gpu_sample(self._gpu_card)
-        data["llm_tasks"] = []  # no source wired yet (widget lands with T5+)
+        # T26: loaded models first, then LLM workers by RSS; the widget
+        # renders name · status per entry
+        data["llm_tasks"] = [{"id": m, "name": m, "status": "loaded"}
+                             for m in _loaded_models()] + _llm_processes()
         return data
 
     def _run(self):

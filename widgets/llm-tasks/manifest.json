@@ -1,8 +1,8 @@
 {
   "name": "llm-tasks",
   "title": "LLM-TASKS",
-  "description": "Active LLM jobs; empty state until a task source is wired.",
+  "description": "Loaded llama-swap models plus running LLM workers, biggest first.",
   "size": { "w": 5, "h": 1 },
   "resize": "free",
-  "min": { "w": 3, "h": 1 }
+  "min": { "w": 2, "h": 1 }
 }
