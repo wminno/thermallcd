@@ -165,6 +165,16 @@ class TestAuthMatrix(PlatformTestBase):
         status, _, body = _http(f"{self.base}/api/nvtop", token=self.token.token)
         self.assertEqual(status, 404)
 
+    def test_tty_endpoint_auth_then_404_without_slot(self):
+        # tty widget (T18): same posture as nvtop — unauthenticated 401;
+        # unplaced or command-less placement answers 404 and never forks
+        status, _, _ = _http(f"{self.base}/api/tty")
+        self.assertEqual(status, 401)
+        self.store.save("default", {"widgets": [
+            {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]})
+        status, _, body = _http(f"{self.base}/api/tty", token=self.token.token)
+        self.assertEqual(status, 404)
+
     def test_frame_endpoint_auth_payload_and_404(self):
         # live editor preview: one widget frame's doc (raw, token injected)
         status, _, _ = _http(f"{self.base}/api/frame?id=w-good")
@@ -262,6 +272,54 @@ class TestLayoutStore(PlatformTestBase):
         self.assertIsNone(layout_mod._validate_layout({"widgets": [
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
              "options": {"view": "history"}}]}))
+
+
+class TestTtySource(PlatformTestBase):
+    # T18: the pane derives entirely from the layout's tty item — the
+    # command is per-instance options (T17), never request input
+    def _tty_store(self):
+        store = layout_mod.LayoutStore(Path(self.tmp.name) / "layouts")
+        return store
+
+    def test_image_none_without_slot_or_command(self):
+        from thermallcd import tty_pane
+        src = tty_pane.TtySource(self._tty_store())
+        try:
+            self.assertIsNone(src.image())            # not placed
+            self._tty_store().save("default", {"widgets": [
+                {"id": "tty", "x": 0, "y": 0, "w": 3, "h": 2}]})
+            self.assertIsNone(src.image())            # placed, no cmd
+            self._tty_store().save("default", {"widgets": [
+                {"id": "tty", "x": 0, "y": 0, "w": 3, "h": 2,
+                 "options": {"cmd": "   "}}]})
+            self.assertIsNone(src.image())            # blank cmd
+        finally:
+            src.stop()
+
+    def test_image_png_when_command_set(self):
+        from thermallcd import tty_pane
+        store = self._tty_store()
+        store.save("default", {"widgets": [
+            {"id": "tty", "x": 0, "y": 0, "w": 3, "h": 2,
+             "options": {"cmd": "printf t18-ok"}}]})
+        src = tty_pane.TtySource(store)
+        try:
+            data = src.image()
+            self.assertTrue(data.startswith(b"\x89PNG"))
+            # same command + box reuses the pane; a new command respawns
+            self.assertEqual(src._cmd, "printf t18-ok")
+            pane = src._pane
+            self.assertIs(src.image() and pane, pane)
+            store.save("default", {"widgets": [
+                {"id": "tty", "x": 0, "y": 0, "w": 3, "h": 2,
+                 "options": {"cmd": "printf t18-v2"}}]})
+            deadline = threading.Event()
+            deadline.wait(0.2)
+            src.image()
+            self.assertIsNot(src._pane, pane)
+            self.assertEqual(src._cmd, "printf t18-v2")
+        finally:
+            src.stop()
         self.assertIn("options", layout_mod._validate_layout({"widgets": [
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
              "options": {"view": 5}}]}))

@@ -206,6 +206,16 @@ class Handler(BaseHTTPRequestHandler):
             if data is None:
                 return self._json(404, {"error": "nvtop not placed"})
             return self._send(200, data, "image/png")
+        if route == "/api/tty":
+            # tty widget (T18): the placement's command runs in a pty, served
+            # as a transparent PNG. The command comes from the layout's tty
+            # item options — never from this request, whose query params are
+            # ignored (D19). 404 when unplaced or no command set: the widget
+            # dims and says so, never fabricating a pane.
+            data = self.server.tty.image()
+            if data is None:
+                return self._json(404, {"error": "tty not placed or no command set"})
+            return self._send(200, data, "image/png")
         if route == "/api/widgets":
             return self._json(200, {"widgets": self.server.registry.scan()})
         if route == "/api/devices":
@@ -428,6 +438,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.port = port
         self.data_dir = Path(data_dir) if data_dir else None
         self._nvtop = None
+        self._tty = None
         self._profiles = (None, 0.0)   # (cache, loaded-at) — re-read each 5 s
         super().__init__(addr, Handler)
 
@@ -455,6 +466,20 @@ class DashboardServer(ThreadingHTTPServer):
     def nvtop_stop(self):
         if self._nvtop is not None:
             self._nvtop.stop()
+
+    @property
+    def tty(self):
+        """Lazy tty image source (T18) — same laziness contract as nvtop:
+        importing pyte/PIL and forking the pane's shell must not happen for
+        tests or startup, only on first widget request."""
+        if self._tty is None:
+            from thermallcd import tty_pane
+            self._tty = tty_pane.TtySource(self.layout)
+        return self._tty
+
+    def tty_stop(self):
+        if self._tty is not None:
+            self._tty.stop()
 
 
 def main(argv=None):
@@ -489,6 +514,7 @@ def main(argv=None):
     finally:
         metrics.stop()
         server.nvtop_stop()
+        server.tty_stop()
         server.server_close()
 
 

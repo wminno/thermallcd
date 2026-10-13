@@ -114,9 +114,12 @@ def _color(value, default):
 class NvtopPane:
     """Owns the nvtop child process + pyte screen; renders thread-safe."""
 
-    def __init__(self, cols, rows, px=14, binary="/usr/bin/nvtop"):
+    def __init__(self, cols, rows, px=14, binary="/usr/bin/nvtop", argv=None):
         self.cols, self.rows, self.px = cols, rows, px
         self.binary = binary
+        # T18: argv spawns an arbitrary command (["/bin/sh", "-c", cmd]);
+        # binary alone keeps the plain single-binary nvtop spawn
+        self.argv = list(argv) if argv else None
         self.font_reg = ImageFont.truetype(FONT_REGULAR, px)
         self.font_bold = ImageFont.truetype(FONT_BOLD, px)
         bbox = self.font_reg.getbbox("M")
@@ -139,7 +142,8 @@ class NvtopPane:
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
             env["LANG"] = "C.utf8"
-            os.execve(binary, [binary], env)
+            child_argv = self.argv or [binary]
+            os.execve(child_argv[0], child_argv, env)
             os._exit(127)
         os.close(slave)
         os.set_blocking(self.master, False)
@@ -160,11 +164,18 @@ class NvtopPane:
                 self.stream.feed(self.filter.feed(data))
 
     def stop(self):
+        # kill the whole group: the child did setsid, so it leads its own
+        # process group — an arbitrary sh -c command's children die with it
+        # (T18), not just the shell
         try:
-            os.kill(self.pid, signal.SIGKILL)
+            os.killpg(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
-        except (ProcessLookupError, ChildProcessError):
-            pass
+        except (ProcessLookupError, ChildProcessError, PermissionError):
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+                os.waitpid(self.pid, 0)
+            except (ProcessLookupError, ChildProcessError):
+                pass
         try:
             os.close(self.master)
         except OSError:
@@ -222,14 +233,15 @@ class NvtopPane:
         return img
 
     @classmethod
-    def for_area(cls, width, height, binary="/usr/bin/nvtop", target_rows=23):
+    def for_area(cls, width, height, binary="/usr/bin/nvtop", target_rows=23,
+                 argv=None):
         """Grid sized to fill width x height; ~target_rows keeps nvtop's layout sane."""
         px = max(8, int(height / target_rows))
         probe = ImageFont.truetype(FONT_REGULAR, px)
         bbox = probe.getbbox("M")
         cols = width // (bbox[2] - bbox[0])
         rows = height // px
-        return cls(cols, rows, px=px, binary=binary)
+        return cls(cols, rows, px=px, binary=binary, argv=argv)
 
 
 class NvtopSource:
@@ -317,3 +329,8 @@ class NvtopSource:
     def stop(self):
         self._stop.set()
         self._drop()
+
+
+# the pane is command-agnostic (any TUI over a pty) — T18's tty source
+# spawns it under sh -c; the nvtop name stays for the nvtop source
+PtyPane = NvtopPane

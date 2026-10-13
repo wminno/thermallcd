@@ -1,0 +1,12 @@
+{
+  "name": "tty",
+  "title": "TTY",
+  "description": "A terminal pane running a command you choose, rendered as pixels from a pty.",
+  "size": { "w": 4, "h": 2 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 },
+  "source": "image",
+  "options": [
+    { "key": "cmd", "label": "Command", "type": "text" }
+  ]
+}

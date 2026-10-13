@@ -159,6 +159,21 @@ server-side from the slot). You ship no `index.html`; the platform owns
 rendering. This is for widgets whose content is a process rendered into a
 pty or similar — if you're painting DOM, you want the default `"html"`.
 
+### The tty widget (T18) — a command in a pane
+
+The bundled `tty` widget is an image source with one text option, `cmd`:
+the platform runs the command under `sh -c` in a pty sized to the slot and
+serves its terminal grid as pixels. Pipes and arguments work
+(`top -d 2`, `watch -n1 'sensors | cut -c…'`).
+
+Security posture, stated plainly: whoever holds the dashboard token is the
+machine's owner, and the command is only writable through the token-gated
+editor — it lives in the layout file and is never taken from the request
+(``/api/tty`` ignores query params entirely, D19). The pane kills its whole
+process group on recreation, removal and service stop, so a command's
+children don't outlive it. If you would not paste the command into that
+machine's own shell, do not put it in the option.
+
 ## Motion budget (D37)
 
 The platform tick drives the panel: `--tlcd-tick` steps at ~15 Hz, matching

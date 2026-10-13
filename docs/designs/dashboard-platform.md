@@ -562,12 +562,14 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Design review D30/D33
   - Files: docs/widgets.md, mock assets
   - Verify: a11y checklist (D35) + 1 m legibility test walked and recorded
-- [ ] **T17 (P3, user request 2026-10-09)** — per-widget view options: selecting a widget in the editor offers view variants — e.g. cpu-load: history graph mode and "summarize all cores" vs per-core (30+ cores clutter the panel)
+- [x] **T17 (P3, user request 2026-10-09)** — per-widget view options: selecting a widget in the editor offers view variants — e.g. cpu-load: history graph mode and "summarize all cores" vs per-core (30+ cores clutter the panel)
   - Needs: manifest schema extension (view variants / options), editor selection options UI, per-widget render modes; multi-instance slot ids likely unblocked first (parked item)
   - Verify: cpu-load renders both a per-core and a summarized view; history graph scrolls live
-- [ ] **T18 (P3, user request 2026-10-09)** — TTY widget: nvtop-style pty pane that spawns an arbitrary process into the tty, command chosen through the widget's selection options
+  - Done 2026-10-13: manifest `options` (select/text) validated in registry.py; values ride the layout item (string→string, structure-validated); editor popover on selection writes per-instance options; frame identity is `id@k=v` (`_wid`/`wid()` mirrored byte for byte — server render, shuffle engine and dashboard client), so an options change drops and refetches the frame while untouched widgets keep theirs; `window.TLCD_OPTIONS` baked into the frame doc. cpu-load gained bars/summary/history views. Multi-instance placement stays parked (one placement per widget).
+- [x] **T18 (P3, user request 2026-10-09)** — TTY widget: nvtop-style pty pane that spawns an arbitrary process into the tty, command chosen through the widget's selection options
   - Needs: pane spawn contract (command as slot config), security pass on what the token holder may spawn, editor options UI (shares T17's selection-options work)
   - Verify: widget runs e.g. `htop`/custom command in its slot at slot-pixel size, survives resize
+  - Done 2026-10-13: `widgets/tty` (image source, `cmd` text option) + `tty_pane.TtySource` — pane derived entirely from the layout's tty item (D19: `/api/tty` ignores query params; command is only writable via the token-gated editor, stored in the layout file). Spawn runs `sh -c` under the service user; the pane kills the whole process group on recreation/removal/stop (setsid child). Security pass: token holder = machine owner, arbitrary commands are the feature — documented in docs/widgets.md. Verified with `top` rendered at a 4x2 slot (600x276 box); resize/command change recreate the pane. htop not installed on this host — same path proven by top and by nvtop's pane.
 - [ ] **T19 (P3, user request 2026-10-09)** — clock widget: digital and analog variants, with a date display
   - Needs: manifest view variants (shares T17's options work); analog face on canvas, sized to slot pixels
   - Verify: both variants keep time through a resize; date legible at small sizes
