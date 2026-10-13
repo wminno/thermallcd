@@ -247,6 +247,34 @@ function nodes() {
   });
 }
 
+// -- T18 placement guard: the panel is a fixed 12x3, but gridstack v12
+// lets an external drag-in land past it (maxRow is not enforced on
+// drops), so check explicitly and reject the move instead of growing a
+// fourth row.
+function outOfBounds(n) {
+  return n.x < 0 || n.y < 0 || n.x + n.w > 12 || n.y + n.h > 3;
+}
+
+function settle(added) {
+  if (loading) return;
+  var bad = null;
+  grid.engine.nodes.forEach(function (n) {   // float mode can displace others
+    if (!bad && outOfBounds(n)) bad = n;
+  });
+  (added || []).forEach(function (n) { if (outOfBounds(n)) bad = n; });
+  if (!bad) { snapshot(); return; }
+  var s = JSON.stringify({ widgets: nodes(), shuffle: pendingShuffle.interval_min });
+  if (hist[ptr] === s) {
+    // the stored layout itself is out of bounds — drop the node, don't loop
+    setTimeout(function () { grid.removeWidget(bad.el); }, 0);
+  } else {
+    // hist top is still the last arrangement that fit — reload it (the
+    // timeout lets the in-flight drop event finish before the revert)
+    setTimeout(function () { applyHistory(ptr); }, 0);
+  }
+  showToast("no room — a " + bad.w + "x" + bad.h + " grid is needed to place " + bad.id);
+}
+
 // -- T15 device scope: which panel this editor edits. Every layout
 // fetch/save and the live preview iframe ride it; the selector (below)
 // appears only when more than one panel reports online.
@@ -343,9 +371,9 @@ function updateChrome() {
 
 function markDirty() { updateChrome(); }
 
-grid.on("change", function () { snapshot(); });
-grid.on("added", function () { snapshot(); });     // palette drag-in drop
-grid.on("removed", function () { snapshot(); });  // deletions may not fire change
+grid.on("change", settle);
+grid.on("added", settle);                        // palette drag-in drop
+grid.on("removed", function () { snapshot(); }); // deletions may not fire change
 grid.on("removed", function (ns) {
   ns.forEach(function (n) { itemOptions.delete(n.el); });   // T17 hygiene
 });
@@ -405,7 +433,6 @@ function select(itemEl) {
       }
       var cur = (itemOptions.get(itemEl) || {})[spec.key];
       if (cur != null) ctl.value = cur;
-      ctl.addEventListener("mousedown", function (e) { e.stopPropagation(); });
       ctl.addEventListener("change", function () {
         var opts = Object.assign({}, itemOptions.get(itemEl) || {});
         if (ctl.value === "") delete opts[spec.key];
@@ -416,12 +443,17 @@ function select(itemEl) {
       lab.appendChild(ctl);
       box.appendChild(lab);
     });
+    // the box swallows mousedown so GridStack's item-drag machinery never
+    // swallows the press that focuses a control (the delete button does the same)
+    box.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     itemEl.querySelector(".grid-stack-item-content").appendChild(box);
   }
   selected = { el: itemEl };
 }
 gridEl.addEventListener("click", function (e) {
-  if (e.target.closest(".tlcd-del")) return;
+  // a click inside the options popover is not a re-select: select() would
+  // rebuild the box and steal the focus from the input being clicked
+  if (e.target.closest(".tlcd-del") || e.target.closest(".tlcd-opts")) return;
   select(e.target.closest(".grid-stack-item"));
 });
 
