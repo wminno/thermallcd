@@ -4,9 +4,10 @@
 # whenever the panel is plugged in; the monitor also retries on its own.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$DIR/.." && pwd)"   # repo root: the template's @REPO@ (WorkingDirectory, --data)
 
 sudo cp "$DIR/99-thermallcd.rules" /etc/udev/rules.d/
-sed -e "s|@USER@|$(id -un)|" -e "s|@REPO@|$DIR|" "$DIR/thermallcd.service.template" | sudo tee /etc/systemd/system/thermallcd.service >/dev/null
+sed -e "s|@USER@|$(id -un)|" -e "s|@REPO@|$REPO|" "$DIR/thermallcd.service.template" | sudo tee /etc/systemd/system/thermallcd.service >/dev/null
 sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --attr-match="idVendor=0416" --attr-match="idProduct=5408" || true
 sudo systemctl daemon-reload

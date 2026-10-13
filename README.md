@@ -83,6 +83,9 @@ git clone https://github.com/wminno/thermallcd.git && cd thermallcd
 sudo systemctl start thermallcd.service
 ```
 
+Reset the dashboard access token with `./deploy/reset-token.sh <new-token>`
+(writes `data/token`, restarts the service; URL-safe characters only).
+
 The dashboard platform (web server, editor, widgets) lands with the capture spike.
 
 ## Contributing widgets
