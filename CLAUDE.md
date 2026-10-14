@@ -29,8 +29,9 @@ Key routing rules:
   @USER@/@REPO@ template filled by `deploy/install.sh`; `.gitignore` covers
   `*.local .env .env.* *.key *.pem *.token secrets/`.
 - `reference/` is gitignored upstream source (436 MB), do not commit it.
-- Repo-local git identity: `Jeroen <jeroen@AI-MiniPC>`; amend email before any
-  GitHub publish.
+- Git identity hygiene: the repo-local author email/hostname is machine-local
+  and never published. Before any GitHub publish, commit emails must use the
+  GitHub account's noreply address.
 
 ## GBrain Search Guidance (configured by /sync-gbrain)
 <!-- gstack-gbrain-search-guidance:start -->
