@@ -113,15 +113,9 @@ def _atomic_write(path: Path, payload: dict):
         raise
 
 
-def _validate_layout(layout: dict) -> str | None:
-    """Basic shape validation; returns an error string or None."""
-    if not isinstance(layout, dict) or not isinstance(layout.get("widgets"), list):
-        return "layout must be an object with a widgets array"
-    if "flair" in layout and layout["flair"] is not None:
-        _, error = _normalize_flair(layout["flair"])
-        if error:
-            return error
-    for item in layout["widgets"]:
+def _validate_widget_items(widgets: list) -> str | None:
+    """Shape validation shared by flat docs and each page of a pages doc."""
+    for item in widgets:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             return "each widget needs an id string"
         for axis in ("x", "y", "w", "h"):
@@ -140,6 +134,86 @@ def _validate_layout(layout: dict) -> str | None:
                 isinstance(k, str) and isinstance(v, str)
                 for k, v in opts.items())):
             return f"{item['id']}: options must be a dict of string values"
+    return None
+
+
+# T28 widget pages: the canonical doc is {cycle_min, pages: [{name, widgets}],
+# ...} and cycles between the pages on a timer. Flat docs ({widgets}) stay
+# valid so pre-pages files keep loading; save() normalizes everything to the
+# pages shape, like the removed shuffle key's dead-key convergence.
+DEFAULT_PAGE_NAME = "Main"
+MAX_PAGE_NAME = 40
+
+
+def _validate_layout(layout: dict) -> str | None:
+    """Basic shape validation; returns an error string or None.
+
+    Accepts both the flat shape and the pages shape so pre-pages files keep
+    loading. A doc carrying both keys validates as pages; save() drops the
+    dead widgets key."""
+    if not isinstance(layout, dict):
+        return "layout must be an object with a widgets array"
+    cycle_min = layout.get("cycle_min")
+    if cycle_min is not None:
+        if not isinstance(cycle_min, (int, float)) or isinstance(cycle_min, bool) \
+                or cycle_min < 0:
+            return "cycle_min must be a number >= 0"
+    pages = layout.get("pages")
+    if pages is not None or "cycle_min" in layout:
+        if not isinstance(pages, list) or not pages:
+            return "pages must be a non-empty array"
+        seen = set()
+        for page in pages:
+            if not isinstance(page, dict):
+                return "each page must be an object"
+            name = page.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return "each page needs a name string"
+            if len(name) > MAX_PAGE_NAME:
+                return f"page name {name!r} is longer than {MAX_PAGE_NAME} characters"
+            if name in seen:
+                return f"page name {name!r} is used twice"
+            seen.add(name)
+            widgets = page.get("widgets")
+            if not isinstance(widgets, list):
+                return f"page {name!r} needs a widgets array"
+            error = _validate_widget_items(widgets)
+            if error:
+                return f"page {name!r}: {error}"
+    else:
+        # flat shape: the pre-T28 document (DEFAULT_LAYOUT, existing files)
+        if not isinstance(layout.get("widgets"), list):
+            return "layout must be an object with a widgets array"
+        error = _validate_widget_items(layout["widgets"])
+        if error:
+            return error
+    if "flair" in layout and layout["flair"] is not None:
+        _, error = _normalize_flair(layout["flair"])
+        if error:
+            return error
+    return None
+
+
+def pages_of(layout: dict) -> list[dict]:
+    """A layout document's pages: pages-shape docs pass through, flat docs
+    wrap as one page. The single dual-shape helper — the render bakes page
+    0's frames, the pane scanners match across pages in document order."""
+    pages = layout.get("pages") if isinstance(layout, dict) else None
+    if isinstance(pages, list) and pages:
+        return pages
+    widgets = layout.get("widgets") if isinstance(layout, dict) else None
+    return [{"name": DEFAULT_PAGE_NAME,
+             "widgets": widgets if isinstance(widgets, list) else []}]
+
+
+def find_item(layout: dict, item_id: str) -> dict | None:
+    """First widget item with this id across all pages, in document order.
+    Image-source panes key on it: the server cannot know which page a
+    cycling panel is showing, so the first placement wins."""
+    for page in pages_of(layout):
+        for item in page["widgets"]:
+            if item.get("id") == item_id:
+                return item
     return None
 
 
@@ -181,7 +255,12 @@ class LayoutStore:
         return json.loads(json.dumps(DEFAULT_LAYOUT))  # deep copy
 
     def save(self, device: str, layout: dict) -> dict:
-        """Write the canonical arrangement. Returns the saved document."""
+        """Write the canonical arrangement. Returns the saved document.
+
+        Everything normalizes to the T28 pages shape: flat input becomes one
+        page named DEFAULT_PAGE_NAME, cycle_min is always written, and the
+        removed shuffle key is dropped — canonical files converge on the
+        current shape, like the flair normalization before it."""
         device = self._safe_name(device)
         error = _validate_layout(layout)
         if error:
@@ -193,8 +272,17 @@ class LayoutStore:
             if err:
                 raise ValueError(err)
             layout = {**layout, "flair": flair}
-        # the removed T14/D28 shuffle config rides in docs saved before the
-        # removal; drop it so canonical files converge on the current shape
-        layout.pop("shuffle", None)
-        _atomic_write(self._canonical(device), layout)
-        return layout
+        pages = layout.get("pages")
+        if isinstance(pages, list):
+            norm_pages = [{"name": page["name"],
+                           "widgets": [dict(item) for item in page["widgets"]]}
+                          for page in pages]
+        else:
+            norm_pages = [{"name": DEFAULT_PAGE_NAME,
+                           "widgets": [dict(item) for item in layout.get("widgets", [])]}]
+        doc = {key: value for key, value in layout.items()
+               if key not in ("widgets", "pages", "cycle_min", "shuffle")}
+        doc["cycle_min"] = int(layout.get("cycle_min") or 0)
+        doc["pages"] = norm_pages
+        _atomic_write(self._canonical(device), doc)
+        return doc

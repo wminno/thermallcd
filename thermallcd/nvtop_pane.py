@@ -19,6 +19,8 @@ import threading
 import pyte
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
+from thermallcd import layout as layout_mod
+
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 
@@ -282,11 +284,11 @@ class NvtopSource:
                 h * cls.CELL_H + (h - 1) * cls.GAP)
 
     def _slot_size(self):
-        """(w, h) of the first nvtop slot in the canonical layout, or None."""
-        for item in self.layout.load("default")["widgets"]:
-            if item["id"] == "nvtop":
-                return item["w"], item["h"]
-        return None
+        """(w, h) of the first nvtop slot in the canonical layout, or None.
+        T28 pages: the match scans every page in document order — the server
+        cannot know which page a cycling panel shows, so the first wins."""
+        item = layout_mod.find_item(self.layout.load("default"), "nvtop")
+        return (item["w"], item["h"]) if item else None
 
     def _repaint_loop(self):
         while not self._stop.wait(60):

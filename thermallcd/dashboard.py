@@ -314,8 +314,10 @@ class Handler(BaseHTTPRequestHandler):
         # (or one saved before T13) renders the defaults
         flair = {**layout_mod.DEFAULT_FLAIR, **(layout.get("flair") or {})}
         token = self._token_supplied()
+        # T28: page 0 bakes the boot frames; the client cycles the rest
+        pages = layout_mod.pages_of(layout)
         slots, srcdocs = [], []
-        for item in layout["widgets"]:
+        for item in pages[0]["widgets"]:
             entry = registry.get(item["id"])
             if entry is None:
                 continue  # absent/malformed widget: the scene shows through (D22/D25)
@@ -323,8 +325,11 @@ class Handler(BaseHTTPRequestHandler):
             srcdocs.append(_widget_srcdoc(self.server.registry, item["id"], token,
                                           item.get("options")))
         profile = self.server.profiles().get(device) or {}
+        pages_payload = [{"name": page["name"], "widgets": _placed(page["widgets"])}
+                         for page in pages]
         page = _render_dashboard(self.server, slots, srcdocs, token, flair,
-                                 device, profile)
+                                 device, profile, pages=pages_payload,
+                                 cycle_min=int(layout.get("cycle_min") or 0))
         return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
 
@@ -373,8 +378,32 @@ def _widget_srcdoc(registry, name: str, token: str,
     return html.escape(_widget_doc(registry, name, token, options), quote=True)
 
 
+def _placed(items: list) -> list:
+    """Widget items shaped for the client's placed list: options ride only
+    when set, so the render matches the shape the editor saves (a baked null
+    would echo into the next save as an invalid null-valued option dict,
+    T29). Used for the boot frames and every page of the T28 pages payload."""
+    placed = []
+    for item in items:
+        w = {"id": item["id"], "x": item["x"], "y": item["y"],
+             "w": item["w"], "h": item["h"]}
+        if item.get("options") is not None:
+            w["options"] = item["options"]
+        placed.append(w)
+    return placed
+
+
+def _script_json(value) -> str:
+    """JSON for an inline <script> context. json.dumps does not escape /, so
+    user text (page names, tty cmd options) could close the tag early with
+    </script>; escaping the slash is a valid JSON escape and parses
+    identically."""
+    return json.dumps(value).replace("</", "<\\/")
+
+
 def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
-                      device: str = "default", profile: dict | None = None) -> str:
+                      device: str = "default", profile: dict | None = None,
+                      pages: list | None = None, cycle_min: int = 0) -> str:
     url = lan_url(server.port)
     claimed = server.token.claimed()
     # D20: the full token prints on the panel until the first successful
@@ -396,13 +425,7 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
     # options ride only when set: the render's placed list must match the
     # shape the editor saves (a baked null would echo into the next save as
     # an invalid null-valued option dict, T29)
-    placed = []
-    for (item, _e) in slots:
-        w = {"id": item["id"], "x": item["x"], "y": item["y"],
-             "w": item["w"], "h": item["h"]}
-        if item.get("options") is not None:
-            w["options"] = item["options"]
-        placed.append(w)
+    placed = _placed([item for (item, _e) in slots])
     # T15: the panel profile sizes the canvas; unknown/absent -> 9.16" default
     w = int((profile or {}).get("w") or 1920)
     h = int((profile or {}).get("h") or 462)
@@ -410,10 +433,14 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
     return (template
             .replace("/*__WATERMARK__*/", watermark)
             .replace("/*__FRAMES__*/", "\n".join(frames))
-            .replace("__FLAIR__", json.dumps(flair))
-            .replace("__WIDGETS__", json.dumps(placed))
+            .replace("__FLAIR__", _script_json(flair))
+            .replace("__WIDGETS__", _script_json(placed))
+            # T28: the full page list + cycle interval drive the client's
+            # page timer; only page 0 is baked as boot frames
+            .replace("__PAGES__", _script_json(pages or []))
+            .replace("__CYCLE_MIN__", str(int(cycle_min or 0)))
             .replace("__GLASS__", json.dumps(flair.get("glass", 0.82)))
-            .replace("__TOKEN__", json.dumps(token))
+            .replace("__TOKEN__", _script_json(token))
             # __TOKEN__ is JSON-quoted for JS context; __TOKEN_URL__ is the
             # raw value for attribute context (guarded subresource URLs)
             .replace("__TOKEN_URL__", urllib.parse.quote(token, safe=""))

@@ -218,10 +218,42 @@ class TestRegistry(PlatformTestBase):
         status, _, body = _http(f"{self.base}/", token=self.token.token)
         self.assertEqual(status, 200)
         self.assertEqual(body.count("<iframe"), 1)   # w-good's frame only
-        self.assertNotIn("w-bad", body)              # malformed: scene shows through
+        # malformed: scene shows through — no frame, though the T28 pages
+        # payload legitimately lists the full arrangement for the cycler
+        self.assertNotIn('data-wid="w-bad"', body)
         self.assertIn("srcdoc=", body)               # per-widget iframe (D21)
         self.assertIn('data-wid="w-good"', body)     # live-preview targeting
         self.assertIn("TLCD_WIDGETS", body)          # the placed arrangement
+
+    def test_pages_doc_renders_page_zero_and_ships_the_cycle(self):
+        # T28: only page 0 bakes boot frames; the full page list + interval
+        # ride the __PAGES__/__CYCLE_MIN__ tokens for the client's cycler
+        self.store.save("default", {
+            "cycle_min": 3,
+            "pages": [
+                {"name": "Main", "widgets": [
+                    {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]},
+                {"name": "Alt", "widgets": [
+                    {"id": "w-good", "x": 2, "y": 0, "w": 2, "h": 1}]}]})
+        status, _, body = _http(f"{self.base}/", token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body.count("<iframe"), 1)   # page 0 only
+        self.assertIn('data-wid="w-good"', body)
+        self.assertIn("window.TLCD_PAGES=", body)
+        self.assertIn("window.TLCD_CYCLE_MIN=3", body)
+        self.assertIn('"name": "Alt"', body)
+
+    def test_page_names_cannot_close_the_script_tag(self):
+        # page names are user text baked into an inline <script>; json.dumps
+        # does not escape /, so "</" is escaped to "<\/" (valid JSON, parses
+        # identically) or a page name could inject script content
+        self.store.save("default", {
+            "pages": [{"name": "</script>x", "widgets": [
+                {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}]})
+        status, _, body = _http(f"{self.base}/", token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertNotIn("</script>x", body)
+        self.assertIn("<\\/script>x", body)
 
     def test_view_options_schema_and_frame_injection(self):
         # T17: manifest options validate; per-instance values reach the
@@ -256,9 +288,15 @@ class TestRegistry(PlatformTestBase):
 
 class TestLayoutStore(PlatformTestBase):
     def test_round_trip(self):
+        # T28: save normalizes to the pages shape — flat input becomes one
+        # page, so canonical files converge on the current shape
         layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev1", layout)
-        self.assertEqual(self.store.load("dev1"), layout)
+        saved = self.store.save("dev1", layout)
+        self.assertEqual(self.store.load("dev1"), saved)
+        self.assertEqual(saved["pages"], [
+            {"name": "Main",
+             "widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}])
+        self.assertEqual(saved["cycle_min"], 0)
 
     def test_rejects_out_of_grid(self):
         bad = {"widgets": [{"id": "x", "x": 11, "y": 0, "w": 4, "h": 1}]}
@@ -276,6 +314,76 @@ class TestLayoutStore(PlatformTestBase):
         # widgets; a null-valued key must validate like an absent key
         self.assertIsNone(layout_mod._validate_layout({"widgets": [
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1, "options": None}]}))
+
+
+class TestPagesLayout(PlatformTestBase):
+    """T28: widget pages cycling on a timer. The canonical doc is
+    {cycle_min, pages: [{name, widgets}]}; flat docs stay valid so
+    pre-pages files keep loading, and save() normalizes everything."""
+
+    def test_pages_doc_round_trips_with_cycle_min(self):
+        pages = {"cycle_min": 7.4,
+                 "pages": [
+                     {"name": "Main", "widgets": [
+                         {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]},
+                     {"name": "GPU", "widgets": [
+                         {"id": "w-good", "x": 2, "y": 0, "w": 2, "h": 1}]}]}
+        saved = self.store.save("pages-dev", pages)
+        self.assertEqual(saved["cycle_min"], 7)   # rotate_min precedent: int()
+        self.assertEqual(self.store.load("pages-dev"), saved)
+
+    def test_migration_pin_flat_doc_with_stale_shuffle_loads_verbatim(self):
+        # the live pre-T28 file shape: flat widgets, full flair, and the
+        # removed shuffle key riding along. The dual-shape validator must
+        # keep accepting it or the restart trips the EC1 corrupt-rename and
+        # the user's arrangement is lost. First save converges the shape.
+        legacy = {
+            "widgets": [{"id": "nvtop", "x": 0, "y": 0, "w": 6, "h": 3}],
+            "flair": dict(layout_mod.DEFAULT_FLAIR, scene="city"),
+            "shuffle": {"interval_min": 2}}
+        (self.store.dir / "legacy.json").write_text(json.dumps(legacy))
+        self.assertEqual(self.store.load("legacy"), legacy)
+        saved = self.store.save("legacy", legacy)
+        self.assertNotIn("shuffle", saved)
+        self.assertEqual(saved["pages"], [
+            {"name": "Main", "widgets": legacy["widgets"]}])
+
+    def test_rejects_bad_pages(self):
+        good = {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}
+        cases = [
+            ({"pages": [], "cycle_min": 0}, "non-empty array"),
+            ({"pages": "nope"}, "non-empty array"),
+            ({"pages": [{"name": "", "widgets": [good]}]}, "needs a name"),
+            ({"pages": [{"name": "x" * 41, "widgets": [good]}]}, "longer than 40"),
+            ({"pages": [{"name": "A", "widgets": [good]},
+                        {"name": "A", "widgets": []}]}, "used twice"),
+            ({"pages": [{"name": "A"}]}, "needs a widgets array"),
+            ({"pages": [{"name": "A", "widgets": [good]}], "cycle_min": -1},
+             "cycle_min"),
+            ({"pages": [{"name": "A", "widgets": [good]}], "cycle_min": "soon"},
+             "cycle_min"),
+            ({"pages": [{"name": "A", "widgets": [good]}], "cycle_min": True},
+             "cycle_min"),
+            ({"pages": [{"name": "A", "widgets": [
+                {"id": "x", "x": 11, "y": 0, "w": 4, "h": 1}]}]},
+             "page 'A': "),   # item errors are page-scoped
+        ]
+        for bad, fragment in cases:
+            with self.subTest(bad=bad):
+                message = layout_mod._validate_layout(bad)
+                self.assertIn(fragment, message)
+
+    def test_pages_of_wraps_flat_and_find_item_scans_pages(self):
+        flat = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 1, "h": 1}]}
+        self.assertEqual(layout_mod.pages_of(flat), [
+            {"name": "Main", "widgets": flat["widgets"]}])
+        paged = {"pages": [
+            {"name": "P1", "widgets": [{"id": "nvtop", "x": 0, "y": 0,
+                                        "w": 4, "h": 2}]},
+            {"name": "P2", "widgets": [{"id": "tty", "x": 0, "y": 0,
+                                        "w": 2, "h": 1}]}]}
+        self.assertIsNone(layout_mod.find_item(flat, "nvtop"))
+        self.assertEqual(layout_mod.find_item(paged, "tty")["w"], 2)
 
 
 class TestTtySource(PlatformTestBase):
@@ -328,6 +436,42 @@ class TestTtySource(PlatformTestBase):
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
              "options": {"view": 5}}]}))
 
+    def test_pages_layout_first_page_wins(self):
+        # T28: the pane scans every page in document order; the server
+        # cannot know which page a cycling panel shows, so the first match
+        # wins — including a tty with a different cmd per page
+        from thermallcd import tty_pane
+        store = self._tty_store()
+        store.save("default", {
+            "pages": [
+                {"name": "P1", "widgets": [
+                    {"id": "tty", "x": 0, "y": 0, "w": 3, "h": 2,
+                     "options": {"cmd": "printf p1"}}]},
+                {"name": "P2", "widgets": [
+                    {"id": "tty", "x": 0, "y": 0, "w": 2, "h": 1,
+                     "options": {"cmd": "printf p2"}}]}]})
+        src = tty_pane.TtySource(store)
+        try:
+            self.assertEqual(src._tty_item()["options"]["cmd"], "printf p1")
+            self.assertTrue(src.image().startswith(b"\x89PNG"))
+        finally:
+            src.stop()
+
+    def test_slot_size_on_pages_layout(self):
+        # nvtop placed only on page 2: the scanner finds it there
+        from thermallcd import nvtop_pane
+        store = self._tty_store()
+        store.save("default", {
+            "pages": [
+                {"name": "P1", "widgets": []},
+                {"name": "P2", "widgets": [
+                    {"id": "nvtop", "x": 0, "y": 0, "w": 4, "h": 2}]}]})
+        src = nvtop_pane.NvtopSource(store)
+        try:
+            self.assertEqual(src._slot_size(), (4, 2))
+        finally:
+            src.stop()
+
     def test_corrupt_file_falls_back_to_default(self):
         self.store.save("dev3", {"widgets": [
             {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]})
@@ -347,7 +491,32 @@ class TestLayoutAPI(PlatformTestBase):
         status, _, doc = _http(f"{self.base}/api/layout?device=api-dev",
                                token=self.token.token)
         self.assertEqual(status, 200)
-        self.assertEqual(doc["widgets"], layout["widgets"])
+        # T28: the stored doc echoes the normalized pages shape
+        self.assertEqual(doc["pages"],
+                         [{"name": "Main", "widgets": layout["widgets"]}])
+
+    def test_put_pages_shape_round_trips(self):
+        pages = {"cycle_min": 1,
+                 "pages": [{"name": "Main", "widgets": [
+                     {"id": "w-good", "x": 2, "y": 1, "w": 2, "h": 1}]}]}
+        status, _, _ = _http(f"{self.base}/api/layout?device=pages-dev",
+                             method="PUT", token=self.token.token, body=pages)
+        self.assertEqual(status, 200)
+        status, _, doc = _http(f"{self.base}/api/layout?device=pages-dev",
+                               token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(doc["pages"], pages["pages"])
+        self.assertEqual(doc["cycle_min"], 1)
+
+    def test_put_bad_pages_400(self):
+        for body in ({"pages": []},
+                     {"pages": [{"name": "", "widgets": []}]},
+                     {"cycle_min": 2, "pages": "nope"}):
+            with self.subTest(body=body):
+                status, _, _ = _http(
+                    f"{self.base}/api/layout?device=pages-bad", method="PUT",
+                    token=self.token.token, body=body)
+                self.assertEqual(status, 400)
 
     def test_put_invalid_400(self):
         status, _, body = _http(f"{self.base}/api/layout", method="PUT",
@@ -468,8 +637,8 @@ class TestMultiPanel(PlatformTestBase):
 
     def test_first_save_forks_the_device_layout(self):
         layout = {"widgets": [{"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("fork-dev", layout)
-        self.assertEqual(self.store.load("fork-dev"), layout)
+        saved = self.store.save("fork-dev", layout)
+        self.assertEqual(self.store.load("fork-dev"), saved)
         # the shared default file is untouched by the fork
         self.assertNotIn(
             {"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1},

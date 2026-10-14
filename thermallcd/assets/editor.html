@@ -185,6 +185,7 @@
 <header>
   <button id="palette-toggle" class="btn" aria-label="toggle palette">☰</button>
   <h1>THERMALLCD · EDITOR</h1>
+  <select id="page-select" class="btn" aria-label="page being edited" hidden></select>
   <select id="device-select" class="btn" hidden
           aria-label="panel being edited"></select>
   <select id="zoom" class="btn" aria-label="preview zoom"></select>
@@ -303,13 +304,17 @@ var grid = makeGrid();
   });
 })();
 
-var hist = [], ptr = -1, baselinePtr = -1, loading = false;
+var hist = [], ptr = -1, baselineJson = null, loading = false;
 var selected = null;
 // T17 per-instance options: keyed by the grid item element (gridstack nodes
 // never carry custom fields reliably across load/undo) — nodes() joins them
 // back in by element, applyHistory rebuilds the map after grid.load
 var itemOptions = new Map();
 var widgetsByName = {};
+
+// T28 widget pages: per-page widget lists held unsaved (the pendingFlair
+// pattern). The active page's list IS the live grid; cycle_min 0 = off.
+var pendingPages = [], activePage = 0, pendingCycleMin = 0;
 
 var paletteBtns = {};   // widget name -> palette button (disabled once placed)
 var gridEl = document.getElementById("tlcd-canvas");
@@ -347,7 +352,7 @@ function settle(added) {
   });
   (added || []).forEach(function (n) { if (outOfBounds(n)) bad = n; });
   if (!bad) { snapshot(); return; }
-  var s = JSON.stringify({ widgets: nodes() });
+  var s = historyEntry();
   if (hist[ptr] === s) {
     // the stored layout itself is out of bounds — drop the node, don't loop
     setTimeout(function () { grid.removeWidget(bad.el); }, 0);
@@ -372,9 +377,10 @@ function layoutUrl() {
 // you edit, before any save. The dashboard's own 1 s layout poll stays
 // authoritative for SAVED changes; this only mirrors the editing state.
 var previewFrame = document.querySelector(".canvas iframe");
-if (DEVICE !== "default") {
-  previewFrame.src = "/?device=" + encodeURIComponent(DEVICE);
-}
+// always embed: the dashboard's T28 page-cycle timer must not run inside
+// the editor preview — it would fight the postMessage pushes for the canvas
+previewFrame.src = "/?embed=1" +
+  (DEVICE !== "default" ? "&device=" + encodeURIComponent(DEVICE) : "");
 var layoutReady = false;
 var pendingFlair = null;   // T13: flair rides the same push + save path
 function pushPreview() {
@@ -390,9 +396,21 @@ previewFrame.addEventListener("load", pushPreview);  // post-save reload re-push
 // re-pushing makes the preview eventually-consistent with the editor
 setInterval(pushPreview, 2000);
 
+// -- T28 pages: one history entry spans every page plus the cycle timing,
+// so undo/redo and the dirty dot work across page switches --
+function mergedPages() {
+  return pendingPages.map(function (p, i) {
+    return i === activePage ? { name: p.name, widgets: nodes() } : p;
+  });
+}
+function historyEntry() {
+  return JSON.stringify({ pages: mergedPages(), cycle_min: pendingCycleMin,
+                          page: activePage });
+}
+
 function snapshot() {
   if (loading) return;
-  var s = JSON.stringify({ widgets: nodes() });
+  var s = historyEntry();
   if (ptr >= 0 && hist[ptr] === s) return;   // dedupe double-fire events
   hist = hist.slice(0, ptr + 1);
   hist.push(s);
@@ -403,36 +421,63 @@ function snapshot() {
 }
 
 function applyHistory(nextPtr) {
-  loading = true;
   var h = JSON.parse(hist[nextPtr]);
-  // gridstack nodes don't carry custom fields through load() — strip them
-  // for the load, then re-key the options map onto the fresh elements
-  grid.load(h.widgets.map(function (w) {
-    var n = Object.assign({}, w);
-    delete n.options;
-    return n;
-  }));
-  itemOptions.clear();
-  h.widgets.forEach(function (w) {
-    if (w.options && Object.keys(w.options).length) {
-      grid.engine.nodes.forEach(function (n) {
-        if (n.id === w.id) itemOptions.set(n.el, w.options);
-      });
-    }
-  });
-  loading = false;
+  pendingPages = h.pages;
+  pendingCycleMin = h.cycle_min;
   ptr = nextPtr;
-  deselect();
+  // switchToPage loads the entry's page list, re-keys the options map and
+  // manages the loading guard; merge=false — the entry's list is already
+  // the truth, folding the live grid back would corrupt the restore
+  switchToPage(h.page || 0, false);
   updateChrome();
+}
+
+// -- T28 page switching: the active page's widget list IS the live grid --
+function switchToPage(idx, merge) {
+  loading = true;
+  try {
+    deselect();
+    if (merge !== false) {   // default: fold the live grid into the page
+      pendingPages[activePage] = { name: pendingPages[activePage].name,
+                                   widgets: nodes() };
+    }
+    activePage = Math.min(Math.max(0, idx | 0), pendingPages.length - 1);
+    var page = pendingPages[activePage];
+    // gridstack nodes don't carry custom fields through load() — strip
+    // options for the load, then re-key them onto the fresh elements;
+    // minW/minH carry too (a load without them lets gridstack shrink
+    // items the registry floors at a larger minimum)
+    grid.load(page.widgets.map(function (w) {
+      var n = Object.assign({}, w);
+      delete n.options;
+      var reg = widgetsByName[w.id];
+      if (reg && reg.min) { n.minW = reg.min.w; n.minH = reg.min.h; }
+      return n;
+    }));
+    itemOptions.clear();
+    page.widgets.forEach(function (w) {
+      if (w.options && Object.keys(w.options).length) {
+        grid.engine.nodes.forEach(function (n) {
+          if (n.id === w.id) itemOptions.set(n.el, w.options);
+        });
+      }
+    });
+    renderChips();
+  } finally {
+    loading = false;
+  }
+  updateChrome();
+  renderPagesUI();
   pushPreview();
 }
 
 function updateChrome() {
   undoBtn.disabled = ptr <= 0;
   redoBtn.disabled = ptr >= hist.length - 1;
-  saveBtn.classList.toggle("dirty", ptr !== baselinePtr);
-  // one instance per widget type: ids are registry names, and the render
-  // path skips any layout id that is not one — a duplicate never renders
+  saveBtn.classList.toggle("dirty", ptr >= 0 && hist[ptr] !== baselineJson);
+  // one instance per widget type per page: ids are registry names, and
+  // the render path skips any layout id that is not one — a widget can
+  // live on several pages (same options = same frame), but not twice on one
   var placed = {};
   nodes().forEach(function (n) { placed[n.id] = true; });
   Object.keys(paletteBtns).forEach(function (name) {
@@ -552,10 +597,11 @@ saveBtn.addEventListener("click", function () {
   fetch(layoutUrl(), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ widgets: nodes(), flair: pendingFlair }),
+    body: JSON.stringify({ pages: mergedPages(), cycle_min: pendingCycleMin,
+                           flair: pendingFlair }),
   }).then(function (r) {
     if (!r.ok) throw new Error(r.status);
-    baselinePtr = ptr;
+    baselineJson = hist[ptr];
     updateChrome();
     showToast("Saved — panel updates in ~2 s");
   }).catch(function () { showToast("Save failed — see server logs"); });
@@ -631,31 +677,127 @@ fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc
   return fetch(layoutUrl()).then(function (r) { return r.json(); });
 }).then(function (doc) {
   initFlair(doc && doc.flair);
+  initPagesUI();
   if (!doc) return;
-  loading = true;
-  grid.load(doc.widgets.map(function (it) {
-    var w = widgetsByName[it.id];
-    var node = { id: it.id, x: it.x, y: it.y, w: it.w, h: it.h };
-    if (w && w.min) { node.minW = w.min.w; node.minH = w.min.h; }
-    return node;
-  }));
-  // T17: re-key saved per-instance options onto the fresh elements
-  itemOptions.clear();
-  doc.widgets.forEach(function (it) {
-    if (it.options && Object.keys(it.options).length) {
-      grid.engine.nodes.forEach(function (n) {
-        if (n.id === it.id) itemOptions.set(n.el, it.options);
-      });
-    }
-  });
-  loading = false;
-  renderChips();
+  // T28: pages shape, with the flat doc wrapped for backward compat
+  pendingPages = doc.pages ||
+    [{ name: "Main", widgets: doc.widgets || [] }];
+  pendingCycleMin = doc.cycle_min || 0;
+  activePage = 0;
+  switchToPage(0, false);
   snapshot();
-  baselinePtr = ptr;
+  baselineJson = hist[ptr];
   updateChrome();
   layoutReady = true;
   pushPreview();
 });
+
+// -- T28 widget pages: sidebar section + header switcher --
+// Per-page placement only (user decision): a widget appears on a page by
+// being placed there; identical placement on every page reuses the same
+// panel frame (same wid), so persistent widgets never reload on a flip.
+var pagesEls = {};
+
+function initPagesUI() {
+  if (pagesEls.name) return;               // editor tab re-runs only on reload
+  var aside = document.getElementById("palette");
+
+  var h2 = document.createElement("h2");
+  h2.textContent = "PAGES";
+  aside.appendChild(h2);
+
+  var sel = document.getElementById("page-select");
+  sel.addEventListener("change", function () {
+    var idx = Number(sel.value);
+    if (pendingPages[idx] && idx !== activePage) {
+      switchToPage(idx);
+      snapshot();
+    }
+  });
+
+  function row(labelText, control) {
+    var wrap = document.createElement("div");
+    wrap.className = "flair-row";
+    var label = document.createElement("label");
+    label.textContent = labelText;
+    wrap.appendChild(label);
+    wrap.appendChild(control);
+    aside.appendChild(wrap);
+    return control;
+  }
+
+  var cyc = document.createElement("input");
+  cyc.type = "number"; cyc.min = "0"; cyc.step = "1";
+  cyc.addEventListener("change", function () {
+    pendingCycleMin = Math.max(0, Number(cyc.value) || 0);
+    cyc.value = pendingCycleMin;
+    snapshot();
+  });
+  pagesEls.cycle = row("cycle pages (min, 0 = off)", cyc);
+
+  var name = document.createElement("input");
+  name.type = "text"; name.maxLength = 40;
+  name.addEventListener("change", function () {
+    var page = pendingPages[activePage];
+    var v = name.value.trim();
+    if (!v || v.length > 40 ||
+        pendingPages.some(function (p) { return p !== page && p.name === v; })) {
+      name.value = page.name;
+      showToast(!v ? "page name cannot be empty"
+                   : v.length > 40 ? "page name is longer than 40 characters"
+                   : "that page name is already used");
+      return;
+    }
+    page.name = v;
+    renderPagesUI();
+    snapshot();
+  });
+  pagesEls.name = row("page name", name);
+
+  var add = document.createElement("button");
+  add.className = "palette-item";
+  add.textContent = "+ add page";
+  add.addEventListener("click", function () {
+    var pname = "Page " + pendingPages.length, n = 2;
+    while (pendingPages.some(function (p) { return p.name === pname; })) {
+      pname = "Page " + pendingPages.length + "-" + n++;
+    }
+    pendingPages.push({ name: pname, widgets: [] });
+    switchToPage(pendingPages.length - 1);
+    snapshot();
+  });
+  aside.appendChild(add);
+
+  var del = document.createElement("button");
+  del.className = "palette-item";
+  del.textContent = "delete page";
+  del.disabled = true;
+  del.addEventListener("click", function () {
+    if (pendingPages.length < 2) return;    // the last page cannot go
+    pendingPages.splice(activePage, 1);
+    switchToPage(activePage - 1, false);    // no merge: the list is the truth
+    snapshot();
+  });
+  aside.appendChild(del);
+  pagesEls.del = del;
+}
+
+function renderPagesUI() {
+  var sel = document.getElementById("page-select");
+  sel.textContent = "";
+  pendingPages.forEach(function (p, i) {
+    var opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+  sel.value = activePage;
+  sel.hidden = false;
+  if (pagesEls.name) {
+    pagesEls.name.value = pendingPages[activePage].name;
+    pagesEls.del.disabled = pendingPages.length < 2;
+  }
+}
 
 // -- T13 flair picker (D29: thumbnail strip with live mini-previews) --
 // Thumbnails are real flair.js renders of each scene in the current theme;

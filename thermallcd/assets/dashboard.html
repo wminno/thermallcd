@@ -6,6 +6,8 @@
 <script>window.TLCD_TOKEN=__TOKEN__;</script>
 <script>window.TLCD_FLAIR=__FLAIR__;</script>
 <script>window.TLCD_WIDGETS=__WIDGETS__;</script>
+<script>window.TLCD_PAGES=__PAGES__;</script>
+<script>window.TLCD_CYCLE_MIN=__CYCLE_MIN__;</script>
 <script>window.TLCD_DEVICE=__DEVICE__;</script>
 <style>
   html, body { margin: 0; width: __PANEL_W__px; height: __PANEL_H__px; overflow: hidden; }
@@ -61,6 +63,12 @@
     animation: fadein .6s ease-out .1s forwards;
   }
   @keyframes fadein { to { opacity: 1; } }
+  /* T28 page-switch exit: an animation swap, not inline opacity — D22's
+     fill-mode: forwards would override any inline style forever. The
+     explicit from is load-bearing: without it the implicit from-state is
+     the class's base opacity 0 and the frame snaps invisible instantly. */
+  @keyframes fadeout { from { opacity: 1; } to { opacity: 0; } }
+  .widget.out { animation: fadeout .4s ease-out forwards; }
   /* URL watermark (z 4): scrim + minimum contrast (D20) */
   .watermark {
     position: absolute; right: 10px; bottom: 6px; z-index: 4;
@@ -134,7 +142,8 @@
             "&token=" + encodeURIComponent(window.TLCD_TOKEN))
         .then(function (r) { return r.json(); })
         .then(function (doc) {
-          var stamp = JSON.stringify([doc.widgets, doc.flair, doc.claimed]);
+          var stamp = JSON.stringify([doc.pages || doc.widgets,
+                                      doc.cycle_min, doc.flair, doc.claimed]);
           if (etag && stamp !== etag) location.reload();
           etag = stamp;
         })
@@ -142,36 +151,18 @@
     }, 1000);
   })();
 
-  // Live editor preview: the editor postMessages its unsaved layout on
-  // every change. Same-id widgets reposition in place — content never
-  // reloads, so widgets visibly glide while you drag. New ids fetch their
-  // frame from /api/frame; ids gone from the layout leave. After a
-  // post-save reload (the poll above) the server markup is already
-  // current, so the editor's re-push is a no-op reposition.
-  var lastFlairJson = "";
-  function renderPreview(widgets, flair) {
-    // flair rides the same push: the editor's picker hot-swaps the scene and
-    // the glass without a reload, mirroring how widget frames glide. The
-    // editor re-pushes every 2 s, so skip unchanged configs — an apply()
-    // forces a full scene render, and it must not double with the tick.
-    if (flair) {
-      var j = JSON.stringify(flair);
-      if (j !== lastFlairJson) {
-        lastFlairJson = j;
-        if (window.TLCDFlair) window.TLCDFlair.apply(flair);
-        document.documentElement.style.setProperty("--tlcd-glass",
-          Math.max(0, Math.min(1, Number(flair.glass) || 0.82)));
-        // CRT scanline overlay (D36): a DOM layer above the scene, so the
-        // toggle is a display flip here, not a scene re-render
-        var sl = document.querySelector(".scanlines");
-        if (sl) sl.style.display = flair.scanlines === false ? "none" : "";
-        // the scene itself: enabled:false hides the canvas (flair.js apply()
-        // mounts on demand when a later push re-enables)
-        var fs = document.getElementById("flair-scene");
-        if (fs) fs.style.display = flair.enabled === false ? "none" : "";
-      }
-    }
-    var grid = document.querySelector(".grid");
+  // Frame reconciliation, shared by the editor preview path and the T28
+  // page cycle (the panel itself never receives postMessage). Same-wid
+  // widgets reposition in place — content never reloads, so widgets glide
+  // while you drag, and a widget placed identically on every page keeps
+  // its frame (per-page placement means no reload for the persistent ones).
+  // New ids fetch their frame from /api/frame; ids gone from the layout
+  // fade out (~0.4 s) then leave. After a post-save reload (the poll
+  // above) the server markup is already current, so a re-push is a no-op
+  // reposition.
+  var dying = {};   // wid -> removal timer id: a wid returning before the
+                    // timer fires is revived mid-fade instead of refetching
+  function reconcileFrames(grid, widgets) {
     var keep = {};
     var latest = {};
     // self-heal: drop duplicate same-wid frames (a page that lived through
@@ -191,6 +182,15 @@
       var row = (w.y + 1) + " / span " + w.h;
       var f = grid.querySelector('iframe[data-wid="' + key + '"]');
       if (f) {
+        if (dying[key]) {   // back before the fade finished: revive it
+          clearTimeout(dying[key]);
+          delete dying[key];
+          f.classList.remove("out");
+          // inline beats the class's base opacity 0; animation:none keeps
+          // fadein from restarting at 0 on the revived frame
+          f.style.animation = "none";
+          f.style.opacity = "1";
+        }
         f.style.gridColumn = col;
         f.style.gridRow = row;
         return;
@@ -224,13 +224,70 @@
         .catch(function () {});
     });
     grid.querySelectorAll("iframe.widget").forEach(function (f) {
-      if (!keep[f.getAttribute("data-wid")]) f.remove();
+      var key = f.getAttribute("data-wid");
+      if (keep[key] || dying[key]) return;
+      f.classList.add("out");   // D22 fill-forwards: exit via animation swap
+      dying[key] = setTimeout(function () {
+        delete dying[key];
+        f.remove();
+      }, 450);
     });
   }
+  var lastFlairJson = "";
+  function renderPreview(widgets, flair) {
+    // flair rides the same push: the editor's picker hot-swaps the scene and
+    // the glass without a reload, mirroring how widget frames glide. The
+    // editor re-pushes every 2 s, so skip unchanged configs — an apply()
+    // forces a full scene render, and it must not double with the tick.
+    if (flair) {
+      var j = JSON.stringify(flair);
+      if (j !== lastFlairJson) {
+        lastFlairJson = j;
+        if (window.TLCDFlair) window.TLCDFlair.apply(flair);
+        document.documentElement.style.setProperty("--tlcd-glass",
+          Math.max(0, Math.min(1, Number(flair.glass) || 0.82)));
+        // CRT scanline overlay (D36): a DOM layer above the scene, so the
+        // toggle is a display flip here, not a scene re-render
+        var sl = document.querySelector(".scanlines");
+        if (sl) sl.style.display = flair.scanlines === false ? "none" : "";
+        // the scene itself: enabled:false hides the canvas (flair.js apply()
+        // mounts on demand when a later push re-enables)
+        var fs = document.getElementById("flair-scene");
+        if (fs) fs.style.display = flair.enabled === false ? "none" : "";
+      }
+    }
+    reconcileFrames(document.querySelector(".grid"), widgets);
+  }
+  // The editor's live preview iframe loads this page: once a preview push
+  // arrives the page-cycle timer must stop fighting it for the canvas
+  // (the poll reload keeps ?embed=1, so the editor canvas never cycles).
+  var tlcdEmbedded = new URLSearchParams(location.search).has("embed");
   window.addEventListener("message", function (e) {
     if (e.origin !== location.origin || !e.data || !e.data.tlcdPreview) return;
+    tlcdEmbedded = true;
     renderPreview(e.data.tlcdPreview.widgets, e.data.tlcdPreview.flair);
   });
+
+  // T28 widget pages: cycle the page list on a timer. The pick never
+  // writes back (flair rotateTimer precedent) — the saved config stays the
+  // user's default. Armed once at boot: config changes arrive through the
+  // poll's reload, so there is nothing to re-arm. A reload mid-crossfade
+  // restarts at page 0 — rare and harmless.
+  (function cyclePages() {
+    var pages = window.TLCD_PAGES || [];
+    var cycleMin = Number(window.TLCD_CYCLE_MIN) || 0;
+    if (pages.length < 2 || cycleMin <= 0 || tlcdEmbedded) return;
+    var idx = 0;
+    var grid = document.querySelector(".grid");
+    (function arm() {
+      setTimeout(function () {
+        if (tlcdEmbedded) return;   // the editor took over the canvas
+        idx = (idx + 1) % pages.length;
+        reconcileFrames(grid, pages[idx].widgets);
+        arm();
+      }, cycleMin * 60000);
+    })();
+  })();
 </script>
 </body>
 </html>

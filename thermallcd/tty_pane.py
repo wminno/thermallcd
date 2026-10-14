@@ -12,6 +12,7 @@ slot size changes, killing the old process group.
 import io
 import threading
 
+from thermallcd import layout as layout_mod
 from thermallcd.nvtop_pane import NvtopPane, NvtopSource
 
 
@@ -26,11 +27,11 @@ class TtySource(NvtopSource):
         self._cmd = None
 
     def _tty_item(self):
-        """The tty item in the canonical layout, or None."""
-        for item in self.layout.load("default")["widgets"]:
-            if item["id"] == "tty":
-                return item
-        return None
+        """The tty item in the canonical layout, or None. T28 pages: first
+        match across pages in document order wins (the server cannot know
+        which page a cycling panel shows), so a tty with a different cmd per
+        page serves the first page's command."""
+        return layout_mod.find_item(self.layout.load("default"), "tty")
 
     def image(self):
         """PNG of the command's pty pane, background keyed transparent;

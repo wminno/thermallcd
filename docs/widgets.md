@@ -159,6 +159,13 @@ server-side from the slot). You ship no `index.html`; the platform owns
 rendering. This is for widgets whose content is a process rendered into a
 pty or similar — if you're painting DOM, you want the default `"html"`.
 
+T28 pages: with a multi-page layout the pane derives its slot size (nvtop)
+and its command (tty) from the **first page carrying the widget**, in
+document order — the server cannot know which page a cycling panel shows.
+A tty with a different `cmd` per page serves the first page's command; the
+pane itself stays warm across page swaps (it keys on the saved layout, not
+the DOM), and a widget not on the displayed page simply stops being polled.
+
 ### The tty widget (T18) — a command in a pane
 
 The bundled `tty` widget is an image source with one text option, `cmd`:
