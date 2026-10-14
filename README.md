@@ -30,12 +30,12 @@ the empty region. A real panel photo lands with the capture spike.*
   `widgets/` is discovered at the next registry scan. Widgets run in isolated iframes
   and consume the platform theme contract (`widgets/theme.css` custom properties).
 - **Configuration is a browser editor.** Drag to move, corner-drag to resize in grid
-  units, full undo/redo, live WYSIWYG canvas — with a burn-in shuffle that permutes
-  widget positions on a timer against panel burn-in.
+  units, full undo/redo, live WYSIWYG canvas — with flair scene rotation on a timer
+  against panel burn-in.
 
 ![Editor design preview](docs/screenshots/editor-design-preview.png)
 *Design preview (AI mockup) — the config editor: live dashboard canvas, widget palette
-with size badges, flair/scanline/opacity/shuffle controls.*
+with size badges, flair/scanline/opacity controls.*
 
 ## Widgets (first six)
 

@@ -1,10 +1,13 @@
-"""Per-device layout store: canonical layouts + burn-in shuffle state.
+"""Per-device layout store: canonical arrangements the editor edits.
 
-Files live under data/layouts/: <device>.json is the canonical arrangement the
-editor edits; <device>.shuffle.json carries the current shuffle permutation
-(D28) — shuffle writes never overwrite the canonical file. All writes are
-atomic (tempfile + os.replace). A corrupt canonical file is moved aside and
-the default layout falls back (EC1) instead of a crash loop.
+Files live under data/layouts/: <device>.json is the canonical arrangement.
+All writes are atomic (tempfile + os.replace). A corrupt canonical file is
+moved aside and the default layout falls back (EC1) instead of a crash loop.
+
+The T14/D28 burn-in shuffle (client-side widget permutation with a persisted
+state file) was removed 2026-10-14 — hunting displaced widgets annoyed the
+user, and T28 widget pages on a timer supersedes it with user-definable
+layouts. Stale <device>.shuffle.json files are dead data; nothing reads them.
 """
 
 import json
@@ -55,32 +58,6 @@ DEFAULT_FLAIR = {
 }
 # T27: what the rotation timer may randomize ("all" = scene+theme+motion)
 FLAIR_ROTATE_WHAT = {"scene", "theme", "motion", "all"}
-
-# T14/D28 burn-in shuffle: minutes between widget permutations on the panel;
-# 0 = off. Stored in the canonical doc (the editor sets it), consumed by the
-# dashboard page's shuffle engine.
-DEFAULT_SHUFFLE = {"interval_min": 0}
-
-
-def _normalize_shuffle(shuffle):
-    """Validated copy of the shuffle config, or an error string.
-
-    Mirrors _normalize_flair: unknown keys dropped (forward-compatible),
-    interval coerced to a non-negative int (a bad value should not 400 the
-    whole layout save)."""
-    if shuffle is None:
-        return dict(DEFAULT_SHUFFLE), None
-    if not isinstance(shuffle, dict):
-        return None, "shuffle must be an object"
-    out = dict(DEFAULT_SHUFFLE)
-    for key, value in shuffle.items():
-        if key == "interval_min":
-            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                    or value < 0):
-                return None, "shuffle.interval_min must be a number >= 0"
-            out[key] = int(value)
-        # unknown keys: dropped silently
-    return out, None
 
 
 def _normalize_flair(flair):
@@ -174,9 +151,6 @@ class LayoutStore:
     def _canonical(self, device: str) -> Path:
         return self.dir / f"{device}.json"
 
-    def _shuffle(self, device: str) -> Path:
-        return self.dir / f"{device}.shuffle.json"
-
     @staticmethod
     def _safe_name(device: str) -> str:
         return device.replace("/", "_").replace("\\", "_") or "default"
@@ -196,10 +170,6 @@ class LayoutStore:
             try:
                 layout = json.loads(path.read_text(encoding="utf-8"))
                 if _validate_layout(layout) is None:
-                    if "shuffle" not in layout:
-                        # pre-T14 docs: serve the off default so every consumer
-                        # (editor settings, dashboard engine) sees the key
-                        layout = {**layout, "shuffle": dict(DEFAULT_SHUFFLE)}
                     return layout
             except (json.JSONDecodeError, OSError):
                 pass
@@ -208,21 +178,14 @@ class LayoutStore:
                 path.rename(self.dir / f"{device}.corrupt-{int(time.time())}.json")
             except OSError:
                 pass
-        out = json.loads(json.dumps(DEFAULT_LAYOUT))  # deep copy
-        out["shuffle"] = dict(DEFAULT_SHUFFLE)
-        return out
+        return json.loads(json.dumps(DEFAULT_LAYOUT))  # deep copy
 
-    def save(self, device: str, layout: dict, shuffled: bool = False) -> dict:
-        """Write canonical or shuffle state. Returns the saved document."""
+    def save(self, device: str, layout: dict) -> dict:
+        """Write the canonical arrangement. Returns the saved document."""
         device = self._safe_name(device)
         error = _validate_layout(layout)
         if error:
             raise ValueError(error)
-        if shuffled:
-            doc = {"widgets": layout["widgets"], "shuffled": True,
-                   "shuffled_at": time.time()}
-            _atomic_write(self._shuffle(device), doc)  # D28: never touches canonical
-            return doc
         # store the normalized flair (defaults filled, unknown keys dropped)
         # so the canonical file is always a complete document
         if layout.get("flair") is not None:
@@ -230,59 +193,8 @@ class LayoutStore:
             if err:
                 raise ValueError(err)
             layout = {**layout, "flair": flair}
-        if "shuffle" in layout and layout["shuffle"] is not None:
-            shuffle, err = _normalize_shuffle(layout["shuffle"])
-            if err:
-                raise ValueError(err)
-            layout = {**layout, "shuffle": shuffle}
+        # the removed T14/D28 shuffle config rides in docs saved before the
+        # removal; drop it so canonical files converge on the current shape
+        layout.pop("shuffle", None)
         _atomic_write(self._canonical(device), layout)
-        # a canonical save may have moved widgets: the stored permutation is
-        # now stale (wrong slots, possible overlaps) — drop it so the panel
-        # reloads canonical and reshuffles from the new arrangement. The
-        # panel persists its permutation at its OWN device key (the page
-        # PUTs ?shuffled=1 with its ?device=), so a default-arrangement
-        # save must also drop every fallback renderer's stale state —
-        # and only theirs: a device with its own canonical file keys to
-        # that, not to the default.
-        self.clear_shuffle(device)
-        if device == "default":
-            for path in self.dir.glob("*.shuffle.json"):
-                dev = path.name[: -len(".shuffle.json")]
-                if not self._canonical(dev).exists():
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        pass
         return layout
-
-    def shuffle_state(self, device: str) -> dict | None:
-        """Current permutation for a device, falling back to the shared
-        default's state when the device renders the default layout (T15)."""
-        device = self._safe_name(device)
-        state = self._shuffle_state(device)
-        # the fallback only applies while the device actually renders the
-        # default arrangement — with its own canonical file the permutation
-        # keys to that, never to the default's
-        if state is None and device != "default" \
-                and not self._canonical(device).exists():
-            state = self._shuffle_state("default")
-        return state
-
-    def _shuffle_state(self, device: str) -> dict | None:
-        path = self._shuffle(device)
-        if not path.exists():
-            return None
-        try:
-            state = json.loads(path.read_text(encoding="utf-8"))
-            if state.get("shuffled") and isinstance(state.get("widgets"), list):
-                return state
-        except (json.JSONDecodeError, OSError):
-            pass
-        return None
-
-    def clear_shuffle(self, device: str):
-        path = self._shuffle(self._safe_name(device))
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass

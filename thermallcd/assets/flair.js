@@ -75,7 +75,7 @@ var MOTION_LABELS = {left:"Drift left", right:"Drift right",
                      forward:"Drive forward", backward:"Roll backward", none:"Still"};
 var DEFAULTS = {scene:"sunset", theme:"synthwave", motion:"right",
                 glass:.82, speed:25, spectrum:true, stars:true, road:false,
-                scanlines:true, enabled:true};
+                scanlines:true, enabled:true, rotate_min:0, rotate_what:"scene"};
 
 /* D37: per-tick camera step. The original deck ran camX at 1.7 units/s
    (≈117 px/s at panel width) and the tick keeps that speed: camX advances
@@ -507,6 +507,72 @@ function step(){
   render();
 }
 
+/* ============ T27 scene rotation (anti-burn-in) ============
+   The scene's static parts (terrain silhouettes, sun) sit at fixed pixels
+   and burn in the same way widgets do. A timer switches to a fresh random
+   pick every rotate_min minutes — the
+   source deck's rand/randpick model, with rotate_what naming what
+   randomizes. Ephemeral by design: the pick is never written back, so the
+   saved config stays the user's default and the mount randomizes it once
+   (a reboot must not re-pin the same pixels for another long stretch). */
+
+var ROTATE_DIMS = {scene:["scene"], theme:["theme"], motion:["motion"],
+                   all:["scene", "theme", "motion"]};
+var rotateTimer = null;
+
+function rotatePool(dim){
+  if (dim === "scene") return Object.keys(SCENES);
+  if (dim === "theme") return Object.keys(THEMES);
+  return Object.keys(MOTION_LABELS);
+}
+
+function rotatePick(){
+  var dims = ROTATE_DIMS[state.rotate_what] || ROTATE_DIMS.scene;
+  var pick = {};
+  dims.forEach(function (dim){
+    var pool = rotatePool(dim).filter(function (k){ return k !== state[dim]; });
+    if (pool.length) pick[dim] = pool[Math.floor(Math.random() * pool.length)];
+  });
+  return pick;
+}
+
+function rotateApply(){
+  const merged = Object.assign({}, state, rotatePick());
+  merged.motion = motionLegal(merged.scene, merged.motion);
+  state = merged;
+}
+
+function rotateFade(cb){
+  // ~0.4s opacity dip on the live canvas — a hard scene switch reads as a
+  // flash, so the switch rides a short fade instead
+  const c = liveCanvas;
+  if (!c){ cb(); return; }
+  c.style.transition = "opacity .4s ease";
+  c.style.opacity = "0";
+  setTimeout(function (){
+    cb();
+    c.style.opacity = "1";
+    setTimeout(function (){ c.style.transition = ""; }, 450);
+  }, 420);
+}
+
+function scheduleRotate(){
+  if (rotateTimer){ clearTimeout(rotateTimer); rotateTimer = null; }
+  const ms = (Number(state.rotate_min) || 0) * 60000;
+  if (ms <= 0 || state.enabled === false || !liveCanvas) return;
+  rotateTimer = setTimeout(function (){
+    rotateTimer = null;
+    // re-check at fire time: an editor push may have turned rotation off
+    if ((Number(state.rotate_min) || 0) <= 0 || state.enabled === false ||
+        !liveCanvas) return;
+    rotateFade(function (){
+      rotateApply();
+      render();
+      scheduleRotate();          // arm the next switch after this one lands
+    });
+  }, ms);
+}
+
 /* ============ public API ============ */
 
 function applyCfg(next){
@@ -519,6 +585,8 @@ function applyCfg(next){
   if (isNaN(merged.glass)) merged.glass = DEFAULTS.glass;
   merged.speed = Math.max(0, Math.min(100, Number(merged.speed)));
   if (isNaN(merged.speed)) merged.speed = DEFAULTS.speed;
+  merged.rotate_min = Math.max(0, Number(merged.rotate_min) || 0);
+  if (!ROTATE_DIMS[merged.rotate_what]) merged.rotate_what = DEFAULTS.rotate_what;
   // scanlines ride along as config: the overlay itself is a dashboard DOM
   // layer (not the scene canvas), so apply() only carries the flag
   ["spectrum", "stars", "road", "scanlines", "enabled"].forEach(function (k){
@@ -535,7 +603,9 @@ function apply(next){
   applyCfg(next);
   if (!liveCanvas && state.enabled !== false){
     const el = document.getElementById("flair-scene");
-    if (el) mount(el, null);
+    if (el) mount(el, null);       // mount() arms the rotation timer itself
+  } else {
+    scheduleRotate();              // config change: re-arm with the new cadence
   }
   if (liveCanvas) render();
 }
@@ -545,6 +615,10 @@ function mount(canvas, cfg){
   liveCanvas = canvas;
   bindCanvas(canvas);
   applyCfg(cfg);
+  // boot pick: with rotation on, a reboot must not re-pin the saved scene
+  if ((Number(state.rotate_min) || 0) > 0 && state.enabled !== false)
+    rotateApply();
+  scheduleRotate();
   render();
 }
 

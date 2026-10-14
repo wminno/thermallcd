@@ -8,8 +8,7 @@ Stdlib ThreadingHTTPServer (PF2) serving:
   /api/nvtop         image-source widget (T4): nvtop TUI rendered from a pty
                      as JPEG, sized to the widget's layout slot (D19/D33)
   /api/widgets       registry listing incl. malformed widgets' failure reasons (D25)
-  /api/layout        per-device canonical layout (GET) + atomic writes (PUT);
-                     ?shuffled=1 routes to the shuffle state (D28)
+  /api/layout        per-device canonical layout (GET) + atomic writes (PUT)
   /widgets/...       widget statics + theme.css + boot.js (public GET — repo content)
 
 Auth (D7/R2): random token in data/token (0600, gitignored). Protected routes
@@ -245,9 +244,6 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/layout":
             device = query.get("device", ["default"])[0]
             doc = self.server.layout.load(device)
-            state = self.server.layout.shuffle_state(device)
-            if state:
-                doc = {**doc, "shuffled": state}
             # the dashboard's 1 s layout poll (D27) reloads on any change to
             # this doc — carrying the claim state here is what flips the
             # on-panel watermark to a lock within a second of first login (D20)
@@ -278,10 +274,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "not found"})
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         device = query.get("device", ["default"])[0]
-        shuffled = query.get("shuffled", ["0"])[0] == "1"
         body = self._body()
         try:
-            doc = self.server.layout.save(device, body, shuffled=shuffled)
+            doc = self.server.layout.save(device, body)
         except ValueError as e:
             return self._json(400, {"error": str(e)})
         return self._json(200, {"ok": True, "saved": doc})
@@ -315,9 +310,6 @@ class Handler(BaseHTTPRequestHandler):
         # without the param still renders the shared default arrangement
         device = query.get("device", ["default"])[0]
         layout = self.server.layout.load(device)
-        shuffle = self.server.layout.shuffle_state(device)
-        if shuffle:
-            layout = {**layout, "widgets": shuffle["widgets"]}
         # D29: synthwave on from first boot — a layout without a flair key
         # (or one saved before T13) renders the defaults
         flair = {**layout_mod.DEFAULT_FLAIR, **(layout.get("flair") or {})}
@@ -351,8 +343,8 @@ def _wid(item_id: str, options: dict | None) -> str:
     """Frame identity (T17): the widget id, suffixed with its per-instance
     options so an options change is a NEW frame — the client drops and
     refetches it through the same path as a newly placed widget. The server
-    render, the shuffle engine and the editor preview must build this
-    identically; nothing parses it back apart."""
+    render and the editor preview must build this identically; nothing parses
+    it back apart."""
     if not options:
         return item_id
     return item_id + "@" + "&".join(
@@ -401,12 +393,9 @@ def _render_dashboard(server, slots, srcdocs, token: str, flair: dict,
             f'<iframe class="widget" data-wid="{html.escape(wid, quote=True)}" '
             f'style="{col} {row}" srcdoc="{srcdoc}" '
             f'title="{html.escape(entry.get("title") or item["id"])}"></iframe>')
-    # the effective arrangement (canonical or the D28 shuffle state): the
-    # shuffle engine permutes from what is actually rendered, not from the
-    # canonical doc the layout API serves
-    # options ride only when set: a baked null echoes into the shuffle
-    # engine's state PUT and the layout validator rejects null-valued
-    # option dicts, so persistence silently 400s (T29)
+    # options ride only when set: the render's placed list must match the
+    # shape the editor saves (a baked null would echo into the next save as
+    # an invalid null-valued option dict, T29)
     placed = []
     for (item, _e) in slots:
         w = {"id": item["id"], "x": item["x"], "y": item["y"],

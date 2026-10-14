@@ -2,7 +2,7 @@
 
 Covers the verify obligations from the plan (T1/T5/T6): 401/401/200 auth,
 registry skip + failure-reason payload (D25), layout round-trip + corrupt
-recovery (EC1) + the D28 canonical/shuffle split.
+recovery (EC1).
 """
 
 import json
@@ -221,8 +221,7 @@ class TestRegistry(PlatformTestBase):
         self.assertNotIn("w-bad", body)              # malformed: scene shows through
         self.assertIn("srcdoc=", body)               # per-widget iframe (D21)
         self.assertIn('data-wid="w-good"', body)     # live-preview targeting
-        self.assertIn("TLCD_WIDGETS", body)          # T14: effective arrangement
-                                                     # for the shuffle engine
+        self.assertIn("TLCD_WIDGETS", body)          # the placed arrangement
 
     def test_view_options_schema_and_frame_injection(self):
         # T17: manifest options validate; per-instance values reach the
@@ -259,9 +258,7 @@ class TestLayoutStore(PlatformTestBase):
     def test_round_trip(self):
         layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
         self.store.save("dev1", layout)
-        # load fills the T14 shuffle default so every consumer sees the key
-        self.assertEqual(self.store.load("dev1"),
-                         {**layout, "shuffle": {"interval_min": 0}})
+        self.assertEqual(self.store.load("dev1"), layout)
 
     def test_rejects_out_of_grid(self):
         bad = {"widgets": [{"id": "x", "x": 11, "y": 0, "w": 4, "h": 1}]}
@@ -276,64 +273,9 @@ class TestLayoutStore(PlatformTestBase):
 
     def test_null_options_pass_validation(self):
         # T29: the panel render bakes "options": null for optionless
-        # widgets; the shuffle engine echoes that shape into its state PUT,
-        # so a null-valued key must validate like an absent key
+        # widgets; a null-valued key must validate like an absent key
         self.assertIsNone(layout_mod._validate_layout({"widgets": [
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1, "options": None}]}))
-
-    def test_shuffle_state_accepts_null_options(self):
-        # the exact body shape the dashboard engine PUTs after permuting
-        # (T29): a 400 here left the shuffle state unwritten, so every
-        # reload booted canonical and burn-in never engaged
-        canonical = {"widgets": [
-            {"id": "a", "x": 0, "y": 0, "w": 2, "h": 1, "options": None},
-            {"id": "b", "x": 2, "y": 0, "w": 2, "h": 1, "options": None},
-        ]}
-        self.store.save("dev9", canonical)
-        permuted = {"widgets": [
-            {"id": "a", "x": 2, "y": 0, "w": 2, "h": 1, "options": None},
-            {"id": "b", "x": 0, "y": 0, "w": 2, "h": 1, "options": None},
-        ]}
-        self.store.save("dev9", permuted, shuffled=True)
-        state = self.store.shuffle_state("dev9")
-        self.assertTrue(state["shuffled"])
-        self.assertEqual(state["widgets"], permuted["widgets"])
-
-    def test_default_save_clears_panel_key_shuffle_state(self):
-        # the panel persists its permutation at its OWN device key while
-        # the single-panel editor saves the default arrangement — the
-        # stale device-key file used to boot over every new save
-        # (user report 2026-10-13: "panel did not update after I saved")
-        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        permuted = {"widgets": [{"id": "a", "x": 2, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("default", base)
-        self.store.save("panel7", permuted, shuffled=True)
-        self.assertIsNotNone(self.store.shuffle_state("panel7"))
-        self.store.save("default", base)          # a fresh canonical save
-        self.assertIsNone(self.store.shuffle_state("panel7"))
-
-    def test_default_save_keeps_forked_device_shuffle_state(self):
-        # a device with its own canonical file is unaffected by default
-        # saves — its permutation keys to its own arrangement
-        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        fork = {"widgets": [{"id": "a", "x": 4, "y": 0, "w": 2, "h": 1}]}
-        permuted = {"widgets": [{"id": "a", "x": 8, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("default", base)
-        self.store.save("panel8", fork)
-        self.store.save("panel8", permuted, shuffled=True)
-        self.store.save("default", base)
-        self.assertIsNotNone(self.store.shuffle_state("panel8"))
-
-    def test_shuffle_fallback_needs_default_rendering(self):
-        # the read fallback serves the default's permutation only while the
-        # device actually renders the default layout (no canonical of its
-        # own); a forked device boots its own arrangement unshuffled instead
-        base = {"widgets": [{"id": "a", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        permuted = {"widgets": [{"id": "a", "x": 2, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("default", base)
-        self.store.save("default", permuted, shuffled=True)
-        self.store.save("panel9", base)           # fork: own canonical now
-        self.assertIsNone(self.store.shuffle_state("panel9"))
 
 
 class TestTtySource(PlatformTestBase):
@@ -386,45 +328,13 @@ class TestTtySource(PlatformTestBase):
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1,
              "options": {"view": 5}}]}))
 
-    def test_shuffle_never_touches_canonical(self):
-        canonical = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev2", canonical)
-        permuted = {"widgets": [{"id": "w-good", "x": 3, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev2", permuted, shuffled=True)
-        # D28: the shuffle write never touched the canonical arrangement
-        self.assertEqual(self.store.load("dev2"),
-                         {**canonical, "shuffle": {"interval_min": 0}})
-        state = self.store.shuffle_state("dev2")
-        self.assertTrue(state["shuffled"])
-        self.assertEqual(state["widgets"], permuted["widgets"])
-
-    def test_canonical_save_clears_stale_shuffle(self):
-        # T14: after a canonical save the stored permutation may reference
-        # moved widgets — dropped so the panel reshuffles from canonical
-        canonical = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev4", canonical)
-        permuted = {"widgets": [{"id": "w-good", "x": 3, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev4", permuted, shuffled=True)
-        self.assertIsNotNone(self.store.shuffle_state("dev4"))
-        edited = {"widgets": [{"id": "w-good", "x": 1, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("dev4", edited)
-        self.assertIsNone(self.store.shuffle_state("dev4"))
-
-    def test_shuffle_config_validated(self):
-        base = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}
-        with self.assertRaises(ValueError):
-            self.store.save("dev5", {**base, "shuffle": {"interval_min": -5}})
-        self.store.save("dev5", {**base, "shuffle": {"interval_min": 30}})
-        self.assertEqual(self.store.load("dev5")["shuffle"], {"interval_min": 30})
-
     def test_corrupt_file_falls_back_to_default(self):
         self.store.save("dev3", {"widgets": [
             {"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]})
         path = self.store.dir / "dev3.json"
         path.write_text("{not json")                       # simulate corruption
         loaded = self.store.load("dev3")
-        self.assertEqual(loaded,
-                         {**layout_mod.DEFAULT_LAYOUT, "shuffle": {"interval_min": 0}})
+        self.assertEqual(loaded, layout_mod.DEFAULT_LAYOUT)
         self.assertTrue(list(self.store.dir.glob("dev3.corrupt-*")))  # moved aside
 
 
@@ -554,34 +464,16 @@ class TestMultiPanel(PlatformTestBase):
 
     def test_device_without_own_layout_falls_back_to_default(self):
         loaded = self.store.load("panel-nofile")
-        self.assertEqual(loaded, {**layout_mod.DEFAULT_LAYOUT,
-                                  "shuffle": {"interval_min": 0}})
+        self.assertEqual(loaded, layout_mod.DEFAULT_LAYOUT)
 
     def test_first_save_forks_the_device_layout(self):
         layout = {"widgets": [{"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1}]}
         self.store.save("fork-dev", layout)
-        self.assertEqual(self.store.load("fork-dev"),
-                         {**layout, "shuffle": {"interval_min": 0}})
+        self.assertEqual(self.store.load("fork-dev"), layout)
         # the shared default file is untouched by the fork
         self.assertNotIn(
             {"id": "w-good", "x": 4, "y": 0, "w": 2, "h": 1},
             self.store.load("default")["widgets"])
-
-    def test_shuffle_state_falls_back_to_default(self):
-        permuted = {"widgets": [{"id": "w-good", "x": 5, "y": 0, "w": 2, "h": 1}]}
-        self.store.save("default", permuted, shuffled=True)
-        try:
-            # a panel rendering the default arrangement inherits its state
-            state = self.store.shuffle_state("panel-x")
-            self.assertTrue(state["shuffled"])
-            # an own state shadows the fallback
-            own = {"widgets": [{"id": "w-good", "x": 6, "y": 0, "w": 2, "h": 1}]}
-            self.store.save("panel-x", own, shuffled=True)
-            self.assertEqual(self.store.shuffle_state("panel-x")["widgets"],
-                             own["widgets"])
-        finally:
-            self.store.clear_shuffle("default")
-            self.store.clear_shuffle("panel-x")
 
     def test_dashboard_page_carries_device_and_profile_tokens(self):
         layout = {"widgets": [{"id": "w-good", "x": 0, "y": 0, "w": 2, "h": 1}]}

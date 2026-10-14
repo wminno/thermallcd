@@ -107,14 +107,6 @@
     if (window.TLCDFlair) window.TLCDFlair.step();
   }, 64);
 
-  // D28 burn-in shuffle: every interval_min the placed widgets permute
-  // within equal-size groups — every widget always fits its new slot —
-  // under a short crossfade, then persist via PUT ?shuffled=1 so a reload
-  // boots into the shuffled arrangement (the canonical file is never
-  // touched; the editor keeps editing canonical). The server boots this
-  // page into the stored permutation: TLCD_WIDGETS is the effective
-  // arrangement, so each shuffle builds on the last. Skipped embedded —
-  // the editor canvas must show canonical under its drag handles.
   // T17 frame identity: the widget id suffixed with its per-instance
   // options, so an options change is a NEW frame (drop + refetch) while an
   // untouched widget keeps its frame. Mirrors _wid() in dashboard.py byte
@@ -134,95 +126,7 @@
     }).join("&");
   }
 
-  (function () {
-    if (window.parent !== window) return;
-    var cur = (window.TLCD_WIDGETS || []).map(function (w) {
-      return { id: w.id, x: w.x, y: w.y, w: w.w, h: w.h, options: w.options };
-    });
-    var timer = null;
-
-    function crossfadeSwap(applyFn) {
-      var frames = document.querySelectorAll("iframe.widget");
-      frames.forEach(function (f) {
-        // the D22 fade-in holds opacity through its animation fill — an
-        // inline opacity would lose to it, so drop the animation first
-        f.style.animation = "none";
-        f.style.transition = "opacity .18s ease";
-        f.style.opacity = "0";
-      });
-      setTimeout(function () {
-        applyFn();
-        frames.forEach(function (f) { f.style.opacity = "1"; });
-      }, 200);
-    }
-
-    function shuffleNow() {
-      var groups = {};
-      cur.forEach(function (w) {
-        var k = w.w + "x" + w.h;
-        (groups[k] = groups[k] || []).push(w);
-      });
-      var placed = {};
-      Object.keys(groups).forEach(function (k) {
-        var g = groups[k];
-        var slots = g.map(function (w) { return { x: w.x, y: w.y }; });
-        if (g.length < 2) { placed[g[0].id] = slots[0]; return; }
-        var perm = slots.slice();
-        for (var i = perm.length - 1; i > 0; i--) {   // Fisher-Yates
-          var j = Math.floor(Math.random() * (i + 1));
-          var t = perm[i]; perm[i] = perm[j]; perm[j] = t;
-        }
-        g.forEach(function (w, idx) { placed[w.id] = perm[idx]; });
-      });
-      // the NEXT arrangement, materialized now: the crossfade moves the DOM
-      // 200 ms later, but the persistence below runs immediately — mutating
-      // cur inside the callback would POST the pre-permutation layout
-      var next = cur.map(function (w) {
-        var p = placed[w.id];
-        return { id: w.id, x: p.x, y: p.y, w: w.w, h: w.h, options: w.options };
-      });
-      crossfadeSwap(function () {
-        var grid = document.querySelector(".grid");
-        next.forEach(function (w) {
-          var f = grid.querySelector('iframe[data-wid="' + wid(w) + '"]');
-          if (f) {
-            f.style.gridColumn = (w.x + 1) + " / span " + w.w;
-            f.style.gridRow = (w.y + 1) + " / span " + w.h;
-          }
-        });
-      });
-      cur = next;
-      // persist the arrangement: the next boot renders it server-side, and
-      // the editor's "last shuffled" note reads the stored timestamp.
-      // Device-scoped (T15): the shuffle belongs to THIS panel.
-      // surface persistence failures: a silent rejection here hid T29 —
-      // the state PUT 400'd on null-valued options and the panel looked
-      // like it never shuffled
-      fetch("/api/layout?device=" + encodeURIComponent(window.TLCD_DEVICE) +
-            "&shuffled=1&token=" + encodeURIComponent(window.TLCD_TOKEN), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ widgets: next }),
-      }).then(function (r) {
-        if (!r.ok) console.warn("shuffle persist failed:", r.status);
-      }).catch(function (e) {
-        console.warn("shuffle persist failed:", e);
-      });
-    }
-
-    // the poll feeds every layout response here; the timer is idempotent
-    // and an interval change rides the reload (the stamp watches doc.shuffle)
-    window.bootShuffle = function (doc) {
-      var min = (doc && doc.shuffle && Number(doc.shuffle.interval_min)) || 0;
-      if (min > 0 && !timer) timer = setInterval(shuffleNow, min * 60000);
-    };
-  })();
-
   // D27: a saved layout change is visible on the panel within one second.
-  // The stamp excludes the D28 shuffle state: the page's own persistence
-  // writes it every interval, and no viewer should reload on it — each
-  // page holds its arrangement locally, and a reload re-renders from the
-  // stored state anyway.
   (function pollLayout() {
     var etag = "";
     setInterval(function () {
@@ -230,9 +134,7 @@
             "&token=" + encodeURIComponent(window.TLCD_TOKEN))
         .then(function (r) { return r.json(); })
         .then(function (doc) {
-          if (window.bootShuffle) window.bootShuffle(doc);
-          var stamp = JSON.stringify([doc.widgets, doc.flair, doc.claimed,
-                                      doc.shuffle]);
+          var stamp = JSON.stringify([doc.widgets, doc.flair, doc.claimed]);
           if (etag && stamp !== etag) location.reload();
           etag = stamp;
         })
