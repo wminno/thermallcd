@@ -12,7 +12,8 @@
         { "value": "today", "label": "Current + today hi/lo" },
         { "value": "forecast", "label": "3-day forecast" }
       ] },
-    { "key": "location", "label": "Location", "type": "text" },
+    { "key": "location", "label": "Location", "type": "text",
+      "suggest": "geocode", "placeholder": "place or lat,lon" },
     { "key": "units", "label": "Units", "type": "select",
       "choices": [
         { "value": "c", "label": "Celsius" },

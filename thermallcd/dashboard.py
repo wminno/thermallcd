@@ -242,6 +242,13 @@ class Handler(BaseHTTPRequestHandler):
                 "srcdoc": _widget_doc(self.server.registry, name,
                                       self._token_supplied(), opts),
             })
+        if route == "/api/geocode":
+            # T20: place-name suggestions for the editor's location option —
+            # a thin stateless proxy over the same keyless geocoder,
+            # token-guarded like every API route. An empty list on any
+            # failure: typing is never blocked.
+            return self._json(200, {
+                "suggestions": weather_mod.suggest(query.get("q", [""])[0])})
         if route == "/api/layout":
             device = query.get("device", ["default"])[0]
             doc = self.server.layout.load(device)

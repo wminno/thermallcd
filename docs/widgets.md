@@ -204,6 +204,16 @@ it persists only in the gitignored layout file; the repo ships none. Like
 the tty pane, the source reads the **default layout only**: a weather
 widget saved to a non-default panel is not fetched.
 
+The location input autocompletes (T20): typing two or more characters
+queries the token-guarded `/api/geocode` route — a thin stateless proxy
+over the same keyless geocoder (count=5, 3 s timeout) — and offers place
+rows (name · region, country). Picking a row fills the input with the
+place **name** (readable, and the server geocodes it back), so a duplicate
+city name is resolved by the geocoder's first hit; the widget's resolved
+place line shows what was actually used, and `lat,lon` stays the exact
+escape hatch. A dead geocoder degrades to an empty suggestion list —
+typing is never blocked, and the route returns no errors of its own.
+
 ## Motion budget (D37)
 
 The platform tick drives the panel: `--tlcd-tick` steps at ~15 Hz, matching

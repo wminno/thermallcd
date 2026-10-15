@@ -958,6 +958,35 @@ class TestWeather(unittest.TestCase):
         self.assertNotIn("weather", bare._sample_once())  # default: key absent
 
 
+    def test_suggest_shapes_and_guards(self):
+        """The editor autocomplete's server half: shaped rows, short/failed
+        queries degrade to [] and never fetch (D23)."""
+        with mock.patch.object(weather_mod, "_fetch_json") as fe:
+            fe.return_value = {"results": [
+                {"name": "Utrecht", "admin1": "Utrecht",
+                 "country": "Netherlands"},
+                {"latitude": 1.0},  # no name: skipped, not a crash
+                {"name": "Utrecht", "admin1": "Eastern Cape",
+                 "country": "South Africa"}]}
+            self.assertEqual(weather_mod.suggest("Utre"), [
+                {"label": "Utrecht", "sub": "Utrecht, Netherlands",
+                 "value": "Utrecht"},
+                {"label": "Utrecht", "sub": "Eastern Cape, South Africa",
+                 "value": "Utrecht"}])
+            self.assertEqual(fe.call_count, 1)
+        with mock.patch.object(weather_mod, "_fetch_json") as fe:
+            self.assertEqual(weather_mod.suggest("u"), [])
+            self.assertEqual(weather_mod.suggest("   "), [])
+            self.assertEqual(weather_mod.suggest(None), [])
+            self.assertEqual(fe.call_count, 0)
+        with mock.patch.object(weather_mod, "_fetch_json",
+                               side_effect=OSError("down")):
+            self.assertEqual(weather_mod.suggest("Utrecht"), [])
+        with mock.patch.object(weather_mod, "_fetch_json",
+                               return_value={"results": None}):
+            self.assertEqual(weather_mod.suggest("Utrecht"), [])
+
+
 class TestWeatherWidget(unittest.TestCase):
     """T20: the bundled weather widget — manifest validity and option baking."""
 
@@ -971,6 +1000,9 @@ class TestWeatherWidget(unittest.TestCase):
                          ["view", "location", "units"])
         self.assertEqual([c["value"] for c in entry["options"][0]["choices"]],
                          ["current", "today", "forecast"])
+        # autocomplete wiring (T20): the option spec survives normalization
+        self.assertEqual(entry["options"][1]["suggest"], "geocode")
+        self.assertEqual(entry["options"][1]["placeholder"], "place or lat,lon")
         srcdoc = dash._widget_doc(registry, "weather", "tok",
                                   {"location": "Utrecht", "units": "f"})
         self.assertIn('window.TLCD_OPTIONS={"location": "Utrecht", "units": "f"}',
@@ -982,6 +1014,24 @@ class TestWeatherWidget(unittest.TestCase):
                 / "widgets" / "weather" / "index.html").read_text()
         self.assertIn("data.weather", html)
         self.assertIn("tlcd-stale", html)
+
+
+class TestGeocodeAPI(PlatformTestBase):
+    """T20: /api/geocode — the editor's token-guarded suggestion proxy."""
+
+    def test_route_token_guarded_and_proxies(self):
+        status, _, _ = _http(f"{self.base}/api/geocode?q=Utre")
+        self.assertEqual(status, 401)
+        with mock.patch.object(weather_mod, "suggest", return_value=[
+                {"label": "Utrecht", "sub": "Utrecht, Netherlands",
+                 "value": "Utrecht"}]) as sug:
+            status, _, body = _http(f"{self.base}/api/geocode?q=Utre",
+                                    token=self.token.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["suggestions"], [
+            {"label": "Utrecht", "sub": "Utrecht, Netherlands",
+             "value": "Utrecht"}])
+        sug.assert_called_once_with("Utre")
 
 
 if __name__ == "__main__":

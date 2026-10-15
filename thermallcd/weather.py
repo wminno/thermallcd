@@ -26,6 +26,9 @@ from thermallcd import layout as layout_mod
 GEOCODE_URL = os.environ.get(
     "THERMALLCD_GEOCODE_URL",
     "https://geocoding-api.open-meteo.com/v1/search?name={name}&count=1")
+GEOCODE_SUGGEST_URL = os.environ.get(
+    "THERMALLCD_GEOCODE_SUGGEST_URL",
+    "https://geocoding-api.open-meteo.com/v1/search?name={name}&count=5")
 WEATHER_URL = os.environ.get(
     "THERMALLCD_WEATHER_URL",
     "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
@@ -34,6 +37,7 @@ WEATHER_URL = os.environ.get(
     "&timezone=auto&forecast_days=3")
 
 FETCH_TIMEOUT_S = 8.0
+SUGGEST_TIMEOUT_S = 3.0  # typing feels laggy if a suggestion hangs longer
 TTL_S = 900.0        # 15 min: one Open-Meteo fetch per location per interval
 RETRY_S = 300.0      # backoff after a failure (and for a geocode miss)
 GEO_TTL_S = 86400.0  # a location's coordinates are stable: cache for a day
@@ -60,6 +64,33 @@ def _fetch_json(url, timeout=FETCH_TIMEOUT_S):
     the failure means (unreachable service, not a missing location)."""
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def suggest(query, timeout=SUGGEST_TIMEOUT_S):
+    """Place-name suggestions for the editor's location autocomplete:
+    [{label, sub, value}] — label is the place name, sub the admin1/country
+    context, and value what fills the input (a name the geocoder resolves
+    back). [] on a too-short query or any failure: typing is never blocked,
+    and a dead geocoder is an empty list, never an error page (D23)."""
+    q = str(query or "").strip()
+    if len(q) < 2:
+        return []
+    try:
+        doc = _fetch_json(GEOCODE_SUGGEST_URL.format(name=urllib.parse.quote(q)),
+                          timeout=timeout)
+    except Exception:
+        return []
+    out = []
+    for r in (doc.get("results") or []):
+        if not isinstance(r, dict) or not r.get("name"):
+            continue
+        out.append({
+            "label": r["name"],
+            "sub": ", ".join(str(r[k]) for k in ("admin1", "country")
+                             if r.get(k)),
+            "value": r["name"],
+        })
+    return out
 
 
 class WeatherSource:

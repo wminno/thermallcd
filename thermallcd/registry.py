@@ -40,6 +40,10 @@ def _validate_options(raw, errors):
                           f"(expected one of {OPTION_TYPES})")
             return None
         entry = {"key": key, "type": typ, "label": spec.get("label", key)}
+        if spec.get("suggest"):
+            entry["suggest"] = str(spec["suggest"])
+        if spec.get("placeholder"):
+            entry["placeholder"] = str(spec["placeholder"])
         if typ == "select":
             choices = spec.get("choices")
             if not isinstance(choices, list) or not choices:

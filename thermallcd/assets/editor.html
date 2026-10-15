@@ -132,6 +132,17 @@
     background: var(--tlcd-field); border: 1px solid var(--tlcd-line);
     border-radius: 3px; padding: 2px 4px; max-width: 180px;
   }
+  /* T20: geocode suggestions under a place-name option input */
+  .tlcd-sug {
+    position: absolute; z-index: 11; min-width: 180px; max-height: 140px;
+    overflow-y: auto; background: rgba(7, 6, 13, .95);
+    border: 1px solid var(--tlcd-line); border-radius: 4px;
+  }
+  .tlcd-sug-row {
+    padding: 3px 6px; font-size: 11px; cursor: pointer; white-space: nowrap;
+  }
+  .tlcd-sug-row.tlcd-sug-on { background: var(--tlcd-accent); }
+  .tlcd-sug-row .tlcd-sug-sub { color: var(--tlcd-dim); }
   #toast {
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
     background: var(--tlcd-surface-2); color: var(--tlcd-text);
@@ -492,6 +503,85 @@ function updateChrome() {
 
 function markDirty() { updateChrome(); }
 
+// T20: geocode suggestions for place-name options (spec.suggest ===
+// "geocode"). Type to search, click a row or Enter to fill; a dead or
+// short query just leaves the input alone. Rows pick on mousedown with
+// preventDefault so the input keeps focus — no blur/close race.
+function attachSuggest(ctl, box) {
+  var dd = null, rows = [], idx = -1, timer = null;
+  function close() {
+    if (dd) { dd.remove(); dd = null; }
+    rows = []; idx = -1;
+  }
+  function paint() {
+    rows.forEach(function (r, i) {
+      r.el.classList.toggle("tlcd-sug-on", i === idx);
+    });
+  }
+  function pick(i) {
+    ctl.value = rows[i].value;
+    ctl.dispatchEvent(new Event("change", {bubbles: true}));
+    close();
+  }
+  function show(sugs) {
+    close();
+    if (!sugs.length) return;
+    dd = document.createElement("div");
+    dd.className = "tlcd-sug";
+    dd.style.left = ctl.offsetLeft + "px";
+    dd.style.top = (ctl.offsetTop + ctl.offsetHeight + 2) + "px";
+    sugs.forEach(function (s, i) {
+      var row = document.createElement("div");
+      row.className = "tlcd-sug-row";
+      var name = document.createElement("span");
+      name.textContent = s.label;
+      row.appendChild(name);
+      if (s.sub) {
+        var sub = document.createElement("span");
+        sub.className = "tlcd-sug-sub";
+        sub.textContent = " · " + s.sub;
+        row.appendChild(sub);
+      }
+      row.addEventListener("mousedown", function (e) {
+        e.preventDefault();          // keep focus, skip the blur path
+        e.stopPropagation();
+        pick(i);
+      });
+      dd.appendChild(row);
+      rows.push({el: row, value: s.value});
+    });
+    box.appendChild(dd);
+    paint();
+  }
+  ctl.addEventListener("input", function () {
+    clearTimeout(timer);
+    var q = ctl.value.trim();
+    if (q.length < 2) { close(); return; }
+    timer = setTimeout(function () {
+      fetch("/api/geocode?q=" + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (doc) {
+          if (ctl.value.trim() !== q) return;  // a newer keystroke owns the box
+          show((doc && doc.suggestions) || []);
+        })
+        .catch(close);
+    }, 250);
+  });
+  ctl.addEventListener("keydown", function (e) {
+    if (!dd) return;
+    if (e.key === "ArrowDown") {
+      idx = Math.min(idx + 1, rows.length - 1); paint(); e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      idx = Math.max(idx - 1, 0); paint(); e.preventDefault();
+    } else if (e.key === "Enter") {
+      if (rows[idx]) { e.preventDefault(); pick(idx); }
+    } else if (e.key === "Escape") {
+      close(); e.stopPropagation();   // close the list, keep the widget selected
+    }
+  });
+  ctl.addEventListener("blur", close);
+}
+
 // -- selection + delete (D31: click-to-select, delete button on the card) --
 function deselect() {
   if (selected) {
@@ -531,7 +621,8 @@ function select(itemEl) {
       if (spec.type === "text") {
         ctl = document.createElement("input");
         ctl.type = "text";
-        ctl.placeholder = "default";
+        ctl.placeholder = spec.placeholder || "default";
+        if (spec.suggest === "geocode") attachSuggest(ctl, box);
       } else {
         ctl = document.createElement("select");
         var empty = document.createElement("option");
