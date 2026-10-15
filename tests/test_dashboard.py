@@ -8,6 +8,7 @@ recovery (EC1).
 import json
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -15,6 +16,7 @@ from unittest import mock
 
 from thermallcd import dashboard as dash
 from thermallcd import layout as layout_mod
+from thermallcd import weather as weather_mod
 
 
 def _http(url, method="GET", token=None, body=None, cookie=None):
@@ -786,6 +788,200 @@ class TestLlmTasks(unittest.TestCase):
              "status": "loaded"},
             {"id": "77", "name": "llama-server", "status": "20.2G · 38 thr"},
         ])
+
+
+class TestWeather(unittest.TestCase):
+    """T20: the Open-Meteo source — coords passthrough, geocode cache,
+    TTL + stale-while-error, and the snapshot publish."""
+
+    LOC = "52.09,5.12"
+    _GEOCODE = {"results": [{"name": "Utrecht", "latitude": 52.09,
+                             "longitude": 5.12, "admin1": "Utrecht",
+                             "country": "Netherlands"}]}
+    _FORECAST = {"current": {"temperature_2m": 18.3,
+                             "apparent_temperature": 16.8, "weather_code": 3},
+                 "daily": {"time": ["2026-10-15", "2026-10-16", "2026-10-17"],
+                           "temperature_2m_max": [21.1, 19.8, 20.0],
+                           "temperature_2m_min": [9.4, 10.2, 8.9],
+                           "weather_code": [3, 61, 1]}}
+
+    def _source(self, root):
+        store = layout_mod.LayoutStore(Path(root) / "layouts")
+        return weather_mod.WeatherSource(store), store
+
+    def _save(self, store, placed):
+        widgets = [{"id": "weather", "x": 0, "y": 0, "w": 3, "h": 2,
+                    "options": {"location": self.LOC}}] if placed else [
+            {"id": "clock", "x": 0, "y": 0, "w": 2, "h": 2}]
+        store.save("default", {"widgets": widgets})
+
+    def test_parse_coords_passthrough_and_rejects(self):
+        self.assertEqual(weather_mod._parse_coords("52.09,5.12"), (52.09, 5.12))
+        self.assertEqual(weather_mod._parse_coords(" 52.09, 5.12 "), (52.09, 5.12))
+        self.assertIsNone(weather_mod._parse_coords("Utrecht"))
+        self.assertIsNone(weather_mod._parse_coords("52.09"))
+        self.assertIsNone(weather_mod._parse_coords("95,200"))  # lon out of range
+        self.assertIsNone(weather_mod._parse_coords(""))
+
+    def test_geocode_caches_and_misses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, _ = self._source(tmp)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value=self._GEOCODE) as fe:
+                first = src._resolve("Utrecht")
+                self.assertEqual(first, (52.09, 5.12,
+                                         {"name": "Utrecht", "admin1": "Utrecht",
+                                          "country": "Netherlands"}))
+                self.assertEqual(fe.call_count, 1)
+                self.assertEqual(src._resolve("Utrecht"), first)
+                self.assertEqual(fe.call_count, 1)  # day cache: no second fetch
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value={"results": []}):
+                self.assertIsNone(src._resolve("Nowhere"))
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value={"error": True, "reason": "x"}):
+                self.assertIsNone(src._resolve("Elsewhere"))
+            src.stop()
+
+    def test_fetch_location_coords_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, _ = self._source(tmp)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value=self._FORECAST) as fe:
+                entry = src._fetch_location(self.LOC)
+            self.assertEqual(fe.call_count, 1)  # coords: no geocoding fetch
+            self.assertEqual(entry["state"], "ok")
+            self.assertEqual(entry["ttl"], weather_mod.TTL_S)
+            self.assertEqual(entry["resolved"], {"name": self.LOC})
+            self.assertEqual(entry["current"]["temperature_2m"], 18.3)
+            self.assertEqual(len(entry["daily"]["weather_code"]), 3)
+            src.stop()
+
+    def test_fetch_location_geocode_miss_is_an_error_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, _ = self._source(tmp)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value={"results": []}):
+                entry = src._fetch_location("Xyzzyville")
+            self.assertEqual(entry["state"], "error")
+            self.assertEqual(entry["error"], "location not found")
+            self.assertEqual(entry["ttl"], weather_mod.RETRY_S)
+            src.stop()
+
+    def test_fetch_json_down_url_raises(self):
+        # closed port: the service is simply not there; the caller keeps the
+        # last good entry or publishes an honest error, never fake data (D23)
+        with self.assertRaises(Exception):
+            weather_mod._fetch_json("http://127.0.0.1:1/v1/forecast")
+
+    def test_refresh_once_ttls_then_refetches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, store = self._source(tmp)
+            self._save(store, placed=True)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value=self._FORECAST) as fe:
+                src.refresh_once()
+                self.assertEqual(src.snapshot()[self.LOC]["state"], "ok")
+                n = fe.call_count
+                src.refresh_once()  # still fresh: no refetch
+                self.assertEqual(fe.call_count, n)
+                src._expires[self.LOC] = 0  # force the deadline
+                src.refresh_once()
+                self.assertEqual(fe.call_count, n + 1)
+            src.stop()
+
+    def test_refresh_once_keeps_last_good_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, store = self._source(tmp)
+            self._save(store, placed=True)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value=self._FORECAST):
+                src.refresh_once()
+            good = src.snapshot()[self.LOC]
+            self.assertEqual(good["state"], "ok")
+            src._expires[self.LOC] = 0  # past the deadline: a real refetch
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   side_effect=OSError("down")):
+                src.refresh_once()
+            self.assertEqual(src.snapshot()[self.LOC], good)  # same entry, same ts
+            self.assertAlmostEqual(src._expires[self.LOC] - time.monotonic(),
+                                   weather_mod.RETRY_S, delta=5.0)
+            src.stop()
+
+    def test_refresh_once_error_entry_when_never_fetched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, store = self._source(tmp)
+            self._save(store, placed=True)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   side_effect=OSError("down")):
+                src.refresh_once()
+            entry = src.snapshot()[self.LOC]
+            self.assertEqual(entry["state"], "error")
+            self.assertEqual(entry["error"], "weather service unreachable")
+            self.assertNotIn("current", entry)  # no fabricated values
+            src.stop()
+
+    def test_refresh_once_evicts_removed_locations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, store = self._source(tmp)
+            self._save(store, placed=True)
+            with mock.patch.object(weather_mod, "_fetch_json",
+                                   return_value=self._FORECAST):
+                src.refresh_once()
+            self.assertEqual(list(src.snapshot()), [self.LOC])
+            self._save(store, placed=False)  # widget removed from the layout
+            src.refresh_once()
+            self.assertEqual(src.snapshot(), {})
+            src.stop()
+
+    def test_refresh_once_idles_without_weather_widget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, _ = self._source(tmp)  # fresh store: default layout, no weather
+            with mock.patch.object(weather_mod, "_fetch_json") as fe:
+                src.refresh_once()
+            self.assertEqual(fe.call_count, 0)
+            self.assertEqual(src.snapshot(), {})
+            src.stop()
+
+    def test_sample_publishes_weather_block(self):
+        loc = self.LOC
+
+        class FakeSource:
+            def snapshot(self):
+                return {loc: {"state": "ok", "ts": 1.0, "ttl": 900.0}}
+
+        sampler = dash.metrics_mod.MetricsSampler(interval=0.05,
+                                                  weather=FakeSource())
+        data = sampler._sample_once()
+        self.assertEqual(data["weather"][loc]["ts"], 1.0)
+        bare = dash.metrics_mod.MetricsSampler(interval=0.05)
+        self.assertNotIn("weather", bare._sample_once())  # default: key absent
+
+
+class TestWeatherWidget(unittest.TestCase):
+    """T20: the bundled weather widget — manifest validity and option baking."""
+
+    def test_manifest_options_and_frame_injection(self):
+        registry = dash.registry_mod.Registry(
+            Path(dash.__file__).parent.parent / "widgets")
+        entry = registry.get("weather")
+        self.assertIsNotNone(entry)
+        self.assertNotIn("error", entry)
+        self.assertEqual([o["key"] for o in entry["options"]],
+                         ["view", "location", "units"])
+        self.assertEqual([c["value"] for c in entry["options"][0]["choices"]],
+                         ["current", "today", "forecast"])
+        srcdoc = dash._widget_doc(registry, "weather", "tok",
+                                  {"location": "Utrecht", "units": "f"})
+        self.assertIn('window.TLCD_OPTIONS={"location": "Utrecht", "units": "f"}',
+                      srcdoc)
+        self.assertIn("window.TLCD_TOKEN=", srcdoc)
+        plain = dash._widget_doc(registry, "weather", "tok", None)
+        self.assertIn("window.TLCD_OPTIONS={}", plain)
+        html = (Path(dash.__file__).parent.parent
+                / "widgets" / "weather" / "index.html").read_text()
+        self.assertIn("data.weather", html)
+        self.assertIn("tlcd-stale", html)
 
 
 if __name__ == "__main__":

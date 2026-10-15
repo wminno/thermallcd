@@ -34,6 +34,7 @@ from pathlib import Path
 from . import layout as layout_mod
 from . import registry as registry_mod
 from . import metrics as metrics_mod
+from . import weather as weather_mod
 
 ASSETS = Path(__file__).parent / "assets"
 TOKEN_COOKIE = "tlcd"
@@ -523,7 +524,8 @@ def main(argv=None):
         return 0
     registry = registry_mod.Registry(Path(args.widgets))
     store = layout_mod.LayoutStore(data_dir / "layouts")
-    metrics = metrics_mod.MetricsSampler(interval=1.0)
+    weather = weather_mod.WeatherSource(store)
+    metrics = metrics_mod.MetricsSampler(interval=1.0, weather=weather)
 
     server = DashboardServer((args.bind, args.port), token, registry, store, metrics,
                              args.port, data_dir=data_dir)
@@ -536,6 +538,7 @@ def main(argv=None):
         pass
     finally:
         metrics.stop()
+        weather.stop()
         server.nvtop_stop()
         server.tty_stop()
         server.server_close()

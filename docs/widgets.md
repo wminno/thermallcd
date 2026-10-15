@@ -181,6 +181,29 @@ process group on recreation, removal and service stop, so a command's
 children don't outlive it. If you would not paste the command into that
 machine's own shell, do not put it in the option.
 
+### The weather widget (T20) — an external source on the snapshot
+
+The bundled `weather` widget is the html-widget pattern pushed one layer
+deeper: its data comes from an external service (Open-Meteo, keyless), but
+the widget itself never opens a socket. A source module
+(`thermallcd/weather.py`) runs a refresher thread of its own — one fetch
+per distinct location per 15-minute TTL, shared by every instance and tab —
+and publishes entries that the metrics sampler copies into the snapshot as
+`data["weather"]`, keyed by the **trimmed** `location` option, byte for
+byte (the widget mirrors `String(OPTS.location||"").trim()`). The tick
+thread only reads the published cache; no widget tick ever waits on a
+network call.
+
+Each entry carries `ts` and `ttl` — the widget dims its own card
+(`.tlcd-stale`) once the entry is older than its `ttl`, even while the
+platform itself is live. A failed fetch keeps the last good entry
+(stale-while-error) or publishes an honest `{"state": "error"}` entry;
+values are never fabricated. The location is a per-instance option entered
+through the editor (place name — geocoded server-side — or `lat,lon`), so
+it persists only in the gitignored layout file; the repo ships none. Like
+the tty pane, the source reads the **default layout only**: a weather
+widget saved to a non-default panel is not fetched.
+
 ## Motion budget (D37)
 
 The platform tick drives the panel: `--tlcd-tick` steps at ~15 Hz, matching
@@ -230,7 +253,8 @@ A complete widget — the skeleton to copy:
 
 with `manifest.json` naming the directory and a `size` that fits the
 content (`1×2` fits a title + number + one detail line). The snapshot's
-fields (`cpu`, `cpu_cores`, `mem`, `load`, `disk`, `gpu`, `llm_tasks`) come
+fields (`cpu`, `cpu_cores`, `mem`, `load`, `disk`, `gpu`, `llm_tasks`,
+`weather`) come
 from the platform's monitor — a widget never shells out for its own data
 unless it ships a source module like nvtop's. That's the whole contract:
 tokens in, metrics through `window.tlcd`, honest empty states, and let the

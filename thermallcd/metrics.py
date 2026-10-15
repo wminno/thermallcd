@@ -4,7 +4,9 @@ One background thread samples /proc and /sys at a fixed interval and keeps a
 single snapshot; /api/metrics serves whatever the last tick produced. The
 stale contract (D23) shapes the payload: every value carries the snapshot
 timestamp, `refresh` tells widgets the tick interval, and a value with no
-source yet is `null` — never a fabricated zero.
+source yet is `null` — never a fabricated zero. Weather (T20) rides along as
+an injected slow external source with its own refresher thread: the tick
+never touches the network for it, it only copies the published cache.
 """
 
 import glob
@@ -133,7 +135,7 @@ def _llm_processes(root="/proc"):
 
 
 class MetricsSampler:
-    def __init__(self, interval: float = 1.0):
+    def __init__(self, interval: float = 1.0, weather=None):
         self.interval = interval
         self.refresh = interval
         self._snap = {"ts": None, "refresh": interval, "data": {}}
@@ -142,6 +144,9 @@ class MetricsSampler:
         self._thread = None
         self._stop = threading.Event()
         self._gpu_card = None
+        # T20: injected slow external source (weather). Its own thread owns
+        # the network; the tick only copies its published cache.
+        self._weather = weather
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -203,6 +208,12 @@ class MetricsSampler:
         # renders name · status per entry
         data["llm_tasks"] = [{"id": m, "name": m, "status": "loaded"}
                              for m in _loaded_models()] + _llm_processes()
+        try:
+            wx = self._weather.snapshot() if self._weather else None
+            if wx:  # T20: absent when nothing is configured — never an empty stub
+                data["weather"] = wx
+        except Exception:
+            pass
         return data
 
     def _run(self):

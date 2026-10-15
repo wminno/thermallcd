@@ -1,0 +1,22 @@
+{
+  "name": "weather",
+  "title": "WEATHER",
+  "description": "Current conditions and a short forecast for a location you choose, via Open-Meteo.",
+  "size": { "w": 3, "h": 2 },
+  "resize": "free",
+  "min": { "w": 2, "h": 1 },
+  "options": [
+    { "key": "view", "label": "View", "type": "select",
+      "choices": [
+        { "value": "current", "label": "Current only" },
+        { "value": "today", "label": "Current + today hi/lo" },
+        { "value": "forecast", "label": "3-day forecast" }
+      ] },
+    { "key": "location", "label": "Location", "type": "text" },
+    { "key": "units", "label": "Units", "type": "select",
+      "choices": [
+        { "value": "c", "label": "Celsius" },
+        { "value": "f", "label": "Fahrenheit" }
+      ] }
+  ]
+}

@@ -37,7 +37,7 @@ the empty region. A real panel photo lands with the capture spike.*
 *Design preview (AI mockup) — the config editor: live dashboard canvas, widget palette
 with size badges, flair/scanline/opacity controls.*
 
-## Widgets (first six)
+## Widgets
 
 | Widget | What it shows | Source |
 |--------|---------------|--------|
@@ -47,6 +47,7 @@ with size badges, flair/scanline/opacity controls.*
 | `disk-usage` | Filesystem usage meter | `/api/metrics` |
 | `load-avg` | 1/5/15-minute load averages | `/api/metrics` |
 | `llm-tasks` | Running LLM jobs — model, tok/s, context | `/api/metrics` |
+| `weather` | Current conditions + forecast for a chosen location | `/api/metrics` (Open-Meteo, 15-min server cache) |
 
 ## Flair
 

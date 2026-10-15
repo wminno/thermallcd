@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widgets/theme.css">
+<script src="/widgets/boot.js"></script>
+</head>
+<body>
+  <div class="tlcd-title">WEATHER</div>
+  <div id="card" style="position: relative">
+    <div class="tlcd-big"><span id="temp">&mdash;</span><span id="unit"
+         class="tlcd-dim-text" style="font-size:18px"></span></div>
+    <div id="cond" class="tlcd-dim-text" style="font-size:16px">&mdash;</div>
+    <div id="place" class="tlcd-dim-text" style="font-size:14px"></div>
+    <div id="hilo" class="tlcd-dim-text" style="font-size:14px"></div>
+    <div id="fc" class="tlcd-dim-text" style="font-size:13px; line-height:1.6"></div>
+  </div>
+<script>
+  // T20: the server fetches Open-Meteo (its own thread, 15-min TTL) and
+  // publishes entries into the metrics snapshot keyed by the TRIMMED
+  // location option — the key must match byte-for-byte. The view and units
+  // options only change rendering: one payload serves every view.
+  var OPTS = window.TLCD_OPTIONS || {};
+  var loc = String(OPTS.location || "").trim();
+  var view = OPTS.view || "today";
+  var isF = (OPTS.units || "c") === "f";
+
+  // WMO weather codes (text, never color alone — D35). Unknown codes
+  // render as "—", never a guess.
+  var WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy",
+             3: "Overcast", 45: "Fog", 48: "Fog",
+             51: "Drizzle", 53: "Drizzle", 55: "Drizzle",
+             56: "Freezing drizzle", 57: "Freezing drizzle",
+             61: "Rain", 63: "Rain", 65: "Rain",
+             66: "Freezing rain", 67: "Freezing rain",
+             71: "Snow", 73: "Snow", 75: "Snow", 77: "Snow",
+             80: "Rain showers", 81: "Rain showers", 82: "Rain showers",
+             85: "Snow showers", 86: "Snow showers",
+             95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm"};
+  var DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  function el(id) { return document.getElementById(id); }
+  function tempStr(c) {
+    if (c == null) return "—";             // no measurement — never a fake zero
+    return Math.round(isF ? c * 9 / 5 + 32 : c) + "°";
+  }
+  function wmoLabel(code) {
+    return (code == null || WMO[code] == null) ? "—" : WMO[code];
+  }
+  function reset(hint) {                   // honest empty state, never zeros
+    el("temp").textContent = "—";
+    el("unit").textContent = "";
+    el("cond").textContent = "—";
+    el("hilo").textContent = "";
+    el("fc").textContent = "";
+    el("place").textContent = hint;
+  }
+
+  function rebuild(wx) {
+    if (!loc) {                            // designed idle: nothing configured
+      reset("set a location in the editor");
+      return;
+    }
+    if (!wx) {                             // configured, no observation yet
+      reset("waiting for first observation…");
+      return;
+    }
+    if (wx.state !== "ok") {               // honest error, values stay empty
+      reset(wx.error || "unavailable");
+      return;
+    }
+    var cur = wx.current || {};
+    el("temp").textContent = tempStr(cur.temperature_2m);
+    el("unit").textContent = isF ? "F" : "C";
+    el("cond").textContent = wmoLabel(cur.weather_code);
+    var res = wx.resolved || {};
+    el("place").textContent =
+      (res.name || loc) + (res.admin1 ? ", " + res.admin1 : "");
+    var daily = wx.daily || {}, hilo = el("hilo"), fc = el("fc");
+    hilo.textContent = "";
+    fc.textContent = "";
+    if (view === "current") return;
+    var hi = (daily.temperature_2m_max || [])[0],
+        lo = (daily.temperature_2m_min || [])[0];
+    hilo.textContent = (hi == null && lo == null) ? ""
+      : "H " + tempStr(hi) + "  L " + tempStr(lo);
+    if (view !== "forecast") return;
+    var times = daily.time || [];
+    for (var i = 0; i < times.length && i < 3; i++) {
+      // noon parse: a bare date is local, +T12:00 dodges the UTC-midnight shift
+      var d = new Date(times[i] + "T12:00:00");
+      var row = document.createElement("div");
+      row.textContent = (i === 0 ? "Today" : DOW[d.getDay()]) + "  " +
+        tempStr((daily.temperature_2m_max || [])[i]) + "/" +
+        tempStr((daily.temperature_2m_min || [])[i]) + "  " +
+        wmoLabel((daily.weather_code || [])[i]);
+      fc.appendChild(row);
+    }
+  }
+
+  var lastSig = null;
+  window.tlcd.onMetrics(function (state, data) {
+    if (state === "stale") return;         // D23: keep last values, boot dims the body
+    var wx = (data.weather || {})[loc];
+    // Weather can go old while the platform is live: the age dim runs every
+    // tick (idempotent toggle), on the card — never on body, boot.js owns that.
+    el("card").classList.toggle("tlcd-stale",
+      !!wx && wx.state === "ok" && Date.now() / 1000 - wx.ts > wx.ttl);
+    // Values rebuild only when the entry changed (ts moves on refetch): the
+    // other 59 ticks of a TTL period are no-ops, no flicker.
+    var sig = wx ? wx.state + "|" + wx.ts : "";
+    if (sig === lastSig) return;
+    lastSig = sig;
+    rebuild(wx);
+  });
+</script>
+</body>
+</html>
