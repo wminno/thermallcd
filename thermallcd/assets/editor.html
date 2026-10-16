@@ -392,6 +392,29 @@ var previewFrame = document.querySelector(".canvas iframe");
 // the editor preview — it would fight the postMessage pushes for the canvas
 previewFrame.src = "/?embed=1" +
   (DEVICE !== "default" ? "&device=" + encodeURIComponent(DEVICE) : "");
+
+// -- T15: an editor opened without ?device= edits the default layout, but a
+// single-panel setup renders its own device file — the two split the first
+// time a device-addressed save forked the layout, and the selector that
+// would show the scope stays hidden below two panels. Exactly one known
+// device is adopted; an explicit param always wins and 0 or 2+ devices keep
+// the default scope (the selector handles the multi-panel case).
+var adoptDevice = new URLSearchParams(location.search).get("device")
+  ? Promise.resolve()
+  : fetch("/api/devices")
+      .then(function (r) { return r.json(); })
+      .then(function (doc) {
+        var devices = (doc && doc.devices) || [];
+        if (devices.length !== 1) return;
+        DEVICE = devices[0].id;
+        // keep the URL truthful for reloads and shares
+        var qs = new URLSearchParams(location.search);
+        qs.set("device", DEVICE);
+        history.replaceState(null, "", location.pathname + "?" + qs);
+        // the preview iframe already loaded the default scope — re-point it
+        previewFrame.src = "/?embed=1&device=" + encodeURIComponent(DEVICE);
+      })
+      .catch(function () {});
 var layoutReady = false;
 var pendingFlair = null;   // T13: flair rides the same push + save path
 function pushPreview() {
@@ -716,7 +739,9 @@ function renderChips() {
   });
 }
 
-fetch("/api/widgets").then(function (r) { return r.json(); }).then(function (doc) {
+adoptDevice.then(function () {
+  return fetch("/api/widgets");
+}).then(function (r) { return r.json(); }).then(function (doc) {
   var aside = document.getElementById("palette");
   doc.widgets.forEach(function (w) {
     if (w.error) {
