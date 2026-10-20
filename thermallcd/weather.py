@@ -5,9 +5,10 @@ publishes per-location entries that MetricsSampler copies into
 data["weather"]. The invariant that shapes this module: the sampler's 1 s
 tick thread only ever reads the published cache (a dict copy under the
 lock) — every network call lives here. Locations come from the saved
-layout (the tty source's precedent), so they are set only through the
-token-gated editor and persist only in gitignored data/ — the repo ships
-none. A failed fetch keeps the last good entry (stale-while-error) or
+layouts (unioned across every device's layout file, not just the default —
+the editor saves to the device's own file, T15), so they are set only
+through the token-gated editor and persist only in gitignored data/ —
+the repo ships none. A failed fetch keeps the last good entry (stale-while-error) or
 publishes an honest error entry; values are never fabricated (D23).
 """
 
@@ -117,15 +118,18 @@ class WeatherSource:
 
     def _locations(self):
         """Distinct trimmed location options of every placed weather widget
-        (T28 pages: across all pages). No placement — no fetches."""
+        (T28 pages: across all pages, and across every device layout — the
+        editor saves to the device's own file, not default). No placement —
+        no fetches."""
         found = []
-        for page in layout_mod.pages_of(self.layout.load("default")):
-            for item in page.get("widgets") or []:
-                if item.get("id") != WIDGET_ID:
-                    continue
-                loc = str((item.get("options") or {}).get("location") or "").strip()
-                if loc and loc not in found:
-                    found.append(loc)
+        for device in self.layout.devices():
+            for page in layout_mod.pages_of(self.layout.load(device)):
+                for item in page.get("widgets") or []:
+                    if item.get("id") != WIDGET_ID:
+                        continue
+                    loc = str((item.get("options") or {}).get("location") or "").strip()
+                    if loc and loc not in found:
+                        found.append(loc)
         return found
 
     def _resolve(self, location):

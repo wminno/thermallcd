@@ -257,10 +257,36 @@ class Handler(BaseHTTPRequestHandler):
             # on-panel watermark to a lock within a second of first login (D20)
             doc = {**doc, "claimed": self.server.token.claimed()}
             return self._json(200, doc)
+        if route == "/api/flair":
+            # decision (c): the panel broadcasts its current flair rotation
+            # pick here; the editor's preview mirrors it. The latest pick
+            # wins and is kept until the next broadcast — rotation may fire
+            # minutes apart, so there is deliberately no freshness window.
+            device = self.server.layout._safe_name(
+                query.get("device", ["default"])[0])
+            pick = self.server.flair_picks.get(device)
+            if pick is None:
+                return self._json(200, {"device": device, "state": None})
+            return self._json(200, {"device": device, "state": pick["state"],
+                                    "ts": pick["ts"]})
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
         route = urllib.parse.urlparse(self.path).path
+        if route == "/api/flair":
+            # decision (c): the panel's flair.js publishes its live rotation
+            # pick (fire-and-forget client-side). The editor polls the pick
+            # back so its preview mirrors the panel instead of replaying the
+            # saved config over it.
+            if not self._guarded():
+                return
+            body = self._body()
+            state = body.get("state")
+            if not isinstance(state, dict) or len(json.dumps(state)) > 4096:
+                return self._json(400, {"error": "bad flair pick"})
+            device = self.server.layout._safe_name(str(body.get("device", "")))
+            self.server.flair_picks[device] = {"state": state, "ts": time.time()}
+            return self._json(200, {"ok": True})
         if route != "/api/login":
             return self._json(404, {"error": "not found"})
         body = self._body()
@@ -471,6 +497,7 @@ class DashboardServer(ThreadingHTTPServer):
         self._nvtop = None
         self._tty = None
         self._profiles = (None, 0.0)   # (cache, loaded-at) — re-read each 5 s
+        self.flair_picks = {}          # decision (c): device -> latest rotation pick
         super().__init__(addr, Handler)
 
     @property

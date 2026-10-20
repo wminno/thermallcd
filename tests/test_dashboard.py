@@ -317,6 +317,17 @@ class TestLayoutStore(PlatformTestBase):
         self.assertIsNone(layout_mod._validate_layout({"widgets": [
             {"id": "w", "x": 0, "y": 0, "w": 1, "h": 1, "options": None}]}))
 
+    def test_devices_enumerates_saves_and_excludes_dead_files(self):
+        # A1: every device the editor has saved (default included) is its
+        # own canonical file; shuffle sidecars and corrupt-renames are dead
+        # data that must not enumerate as devices
+        self.store.save("2025ACFC9E03", {"widgets": []})
+        self.store.save("dev2", {"widgets": []})
+        (self.store.dir / "dev1.shuffle.json").write_text("{}")
+        (self.store.dir / "dev2.corrupt-9.json").write_text("{}")
+        (self.store.dir / "dev2.json.abc.tmp").write_text("{}")  # atomic temp
+        self.assertEqual(self.store.devices(), ["2025ACFC9E03", "dev2"])
+
 
 class TestPagesLayout(PlatformTestBase):
     """T28: widget pages cycling on a timer. The canonical doc is
@@ -941,6 +952,26 @@ class TestWeather(unittest.TestCase):
                 src.refresh_once()
             self.assertEqual(fe.call_count, 0)
             self.assertEqual(src.snapshot(), {})
+            src.stop()
+
+    def test_locations_union_across_device_layouts(self):
+        # A1: the editor saves to the device's own layout file (T15), so a
+        # weather widget placed there must be picked up even with no
+        # weather in the shared default — the old default-only read held
+        # stale locations from files the editor no longer writes
+        with tempfile.TemporaryDirectory() as tmp:
+            src, store = self._source(tmp)
+            store.save("2025ACFC9E03", {"widgets": [
+                {"id": "weather", "x": 0, "y": 0, "w": 3, "h": 2,
+                 "options": {"location": "  Amersfoort, NL "}}]})
+            store.save("dev2", {"widgets": [
+                {"id": "weather", "x": 0, "y": 0, "w": 3, "h": 2,
+                 "options": {"location": "Utrecht"}},
+                {"id": "weather", "x": 3, "y": 0, "w": 3, "h": 2,
+                 "options": {"location": "Utrecht"}}]})  # deduped
+            store.save("dev3", {"widgets": [
+                {"id": "clock", "x": 0, "y": 0, "w": 2, "h": 2}]})
+            self.assertEqual(src._locations(), ["Amersfoort, NL", "Utrecht"])
             src.stop()
 
     def test_sample_publishes_weather_block(self):

@@ -260,7 +260,10 @@ function makeGrid() {
   g.on("change", settle);
   g.on("added", settle);                        // palette drag-in drop
   g.on("removed", function () { snapshot(); }); // deletions may not fire change
-  g.on("removed", function (ns) {               // T17 hygiene
+  // gridstack's event wrapper passes (event, event.detail) — the detail is
+  // the changed-nodes array; the bare-arg form got the CustomEvent instead
+  // and threw on every deletion (T33)
+  g.on("removed", function (_ev, ns) {          // T17 hygiene
     ns.forEach(function (n) { itemOptions.delete(n.el); });
   });
   return g;
@@ -355,7 +358,10 @@ function outOfBounds(n) {
   return n.x < 0 || n.y < 0 || n.x + n.w > 12 || n.y + n.h > 3;
 }
 
-function settle(added) {
+// gridstack's event wrapper passes (event, event.detail) — `added` is the
+// changed-nodes array, not the CustomEvent (T33: the bare form threw here on
+// every settle, so the out-of-bounds revert+notice below never ran)
+function settle(_ev, added) {
   if (loading) return;
   var bad = null;
   grid.engine.nodes.forEach(function (n) {   // float mode can displace others
@@ -417,18 +423,38 @@ var adoptDevice = new URLSearchParams(location.search).get("device")
       .catch(function () {});
 var layoutReady = false;
 var pendingFlair = null;   // T13: flair rides the same push + save path
+var flairBaseline = null;  // decision (c): saved-flair fingerprint — unsaved edits win
+var flairPick = null;      // the panel's live rotation pick, polled back
 function pushPreview() {
   // before the initial layout load the server render already matches the
   // grid — pushing the empty grid would needlessly drop every frame
   if (!layoutReady) return;
+  var flair = pendingFlair;
+  if (flairPick && flairBaseline !== null &&
+      JSON.stringify(pendingFlair) === flairBaseline) {
+    // the panel rotated away from the saved config — mirror its live pick.
+    // rotate_min: 0 disarms the preview's own rotation timer (every push
+    // carries the pick, so widget-edit pushes can't stomp the mirror)
+    flair = Object.assign({}, flairPick, { rotate_min: 0 });
+  }
   previewFrame.contentWindow.postMessage(
-    { tlcdPreview: { widgets: nodes(), flair: pendingFlair } }, location.origin);
+    { tlcdPreview: { widgets: nodes(), flair: flair } }, location.origin);
 }
 previewFrame.addEventListener("load", pushPreview);  // post-save reload re-pushes
 // a push lost while the preview reloads (its message listener is briefly
 // absent) would otherwise leave the preview stale until the next edit —
 // re-pushing makes the preview eventually-consistent with the editor
 setInterval(pushPreview, 2000);
+// decision (c): poll the panel's current rotation pick so the preview can
+// mirror it. After a server restart there is no pick — the preview shows
+// the saved config until the next rotation fires.
+setInterval(function () {
+  if (!layoutReady) return;
+  fetch("/api/flair?device=" + encodeURIComponent(DEVICE))
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (doc) { flairPick = (doc && doc.state) || null; })
+    .catch(function () { flairPick = null; });
+}, 2000);
 
 // -- T28 pages: one history entry spans every page plus the cycle timing,
 // so undo/redo and the dirty dot work across page switches --
@@ -716,6 +742,7 @@ saveBtn.addEventListener("click", function () {
   }).then(function (r) {
     if (!r.ok) throw new Error(r.status);
     baselineJson = hist[ptr];
+    flairBaseline = JSON.stringify(pendingFlair);
     updateChrome();
     showToast("Saved — panel updates in ~2 s");
   }).catch(function () { showToast("Save failed — see server logs"); });
@@ -765,6 +792,12 @@ adoptDevice.then(function () {
     btn.addEventListener("click", function () {
       var node = { id: w.name, w: w.size.w, h: w.size.h };
       if (w.min) { node.minW = w.min.w; node.minH = w.min.h; }
+      // T33: the grid is a fixed 12x3 — deny instead of letting GridStack
+      // grow rows beyond the panel (a taller grid is never rendered)
+      if (!grid.willItFit(node)) {
+        showToast("not enough room for " + (w.title || w.name));
+        return;
+      }
       grid.addWidget(node);
       renderChips();
     });
@@ -973,6 +1006,7 @@ function flairChanged(needsThumbs) {
 function initFlair(saved) {
   if (flairEls.scene) return;               // editor tab re-runs only on reload
   pendingFlair = Object.assign({}, window.TLCDFlair.DEFAULTS, saved || {});
+  flairBaseline = JSON.stringify(pendingFlair);
   var aside = document.getElementById("palette");
 
   var h2 = document.createElement("h2");

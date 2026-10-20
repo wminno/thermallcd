@@ -229,6 +229,14 @@ class LayoutStore:
     def _safe_name(device: str) -> str:
         return device.replace("/", "_").replace("\\", "_") or "default"
 
+    def devices(self) -> list:
+        """Canonical layout file stems on disk — every device the editor has
+        saved. Shuffle sidecars and corrupt-renames are dead data, not
+        devices; atomic-write temp files never match the glob."""
+        return sorted(p.stem for p in self.dir.glob("*.json")
+                      if not p.name.endswith(".shuffle.json")
+                      and ".corrupt-" not in p.name)
+
     def load(self, device: str) -> dict:
         """Canonical layout for a device; the shared default arrangement when
         the device has no file of its own (T15) or the file is corrupt."""

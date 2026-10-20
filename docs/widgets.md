@@ -200,9 +200,9 @@ platform itself is live. A failed fetch keeps the last good entry
 (stale-while-error) or publishes an honest `{"state": "error"}` entry;
 values are never fabricated. The location is a per-instance option entered
 through the editor (place name — geocoded server-side — or `lat,lon`), so
-it persists only in the gitignored layout file; the repo ships none. Like
-the tty pane, the source reads the **default layout only**: a weather
-widget saved to a non-default panel is not fetched.
+it persists only in the gitignored layout file; the repo ships none. The
+source unions locations across **every device's layout file** (the editor
+saves to the device's own file, T15) — a widget on any panel is fetched.
 
 The location input autocompletes (T20): typing two or more characters
 queries the token-guarded `/api/geocode` route — a thin stateless proxy

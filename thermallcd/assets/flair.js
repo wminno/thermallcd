@@ -540,6 +540,24 @@ function rotateApply(){
   const merged = Object.assign({}, state, rotatePick());
   merged.motion = motionLegal(merged.scene, merged.motion);
   state = merged;
+  broadcastPick();
+}
+
+// decision (c): the panel publishes its current pick so the editor's preview
+// can mirror the live rotation instead of replaying the saved config over it.
+// Top-level panel tabs only — the editor's preview iframe runs this same file
+// nested (window.top !== self) and must not broadcast. Fire-and-forget: a
+// failed broadcast never breaks the rotation.
+function broadcastPick(){
+  if (window.top !== window.self) return;
+  if (!window.TLCD_DEVICE || !window.TLCD_TOKEN) return;
+  try {
+    fetch("/api/flair?token=" + encodeURIComponent(window.TLCD_TOKEN), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device: window.TLCD_DEVICE, state: state }),
+    }).catch(function () {});
+  } catch (e) { /* blocked or offline — rotation must not care */ }
 }
 
 function rotateFade(cb){
