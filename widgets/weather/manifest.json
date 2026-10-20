@@ -18,6 +18,11 @@
       "choices": [
         { "value": "c", "label": "Celsius" },
         { "value": "f", "label": "Fahrenheit" }
+      ] },
+    { "key": "iconstyle", "label": "Icon style", "type": "select",
+      "choices": [
+        { "value": "simple", "label": "Simple (line)" },
+        { "value": "color", "label": "Full color" }
       ] }
   ]
 }
