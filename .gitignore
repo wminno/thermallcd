@@ -8,8 +8,9 @@ __pycache__/
 # session artifacts
 *.jpeg
 *.png
-# ...except intentional repo images (README design previews)
+# ...except intentional repo images (README screenshots)
 !docs/screenshots/*.png
+!docs/screenshots/*.jpg
 tools/*.bin
 # machine-specific / sensitive: never commit
 *.local
