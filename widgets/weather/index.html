@@ -4,16 +4,22 @@
 <meta charset="utf-8">
 <link rel="stylesheet" href="/widgets/theme.css">
 <script src="/widgets/boot.js"></script>
+<style>
+  #wicon { position: absolute; top: 2px; right: 0; width: 40px; height: 40px; }
+  #wicon svg { display: block; }
+  .fc-ic { display: inline-block; vertical-align: -2.5px; margin-right: 7px; }
+</style>
 </head>
 <body>
   <div class="tlcd-title">WEATHER</div>
   <div id="card" style="position: relative">
+    <span id="wicon"></span>
     <div class="tlcd-big"><span id="temp">&mdash;</span><span id="unit"
          class="tlcd-dim-text" style="font-size:18px"></span></div>
-    <div id="cond" class="tlcd-dim-text" style="font-size:16px">&mdash;</div>
+    <div id="cond" class="tlcd-dim-text" style="font-size:18px">&mdash;</div>
     <div id="place" class="tlcd-dim-text" style="font-size:14px"></div>
     <div id="hilo" class="tlcd-dim-text" style="font-size:14px"></div>
-    <div id="fc" class="tlcd-dim-text" style="font-size:13px; line-height:1.6"></div>
+    <div id="fc" class="tlcd-dim-text" style="font-size:16px; line-height:1.6"></div>
   </div>
 <script>
   // T20: the server fetches Open-Meteo (its own thread, 15-min TTL) and
@@ -25,8 +31,8 @@
   var view = OPTS.view || "today";
   var isF = (OPTS.units || "c") === "f";
 
-  // WMO weather codes (text, never color alone — D35). Unknown codes
-  // render as "—", never a guess.
+  // WMO weather codes (text + icon, never color alone — D35). Unknown codes
+  // render as "—"/no icon, never a guess.
   var WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy",
              3: "Overcast", 45: "Fog", 48: "Fog",
              51: "Drizzle", 53: "Drizzle", 55: "Drizzle",
@@ -38,6 +44,42 @@
              85: "Snow showers", 86: "Snow showers",
              95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm"};
   var DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  // Line icons, currentColor only (inherits the theme text token — D32:
+  // no hardcoded color). The cloud is one shared path; each condition adds
+  // what sits under or beside it.
+  var CLOUD = '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.45a4.42 4.42 0 1 1 0 8.84Z"/>';
+  var CLOUD_UP = '<g transform="translate(0,-3) scale(0.88)">' + CLOUD + '</g>';
+  var ICONS = {
+    sun: '<circle cx="12" cy="12" r="4.4"/><path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5l1.5 1.5M17 17l1.5 1.5M5.5 18.5L7 17M17 7l1.5-1.5"/>',
+    partly: '<circle cx="7" cy="6.5" r="2.6"/><path d="M7 2.7v1.3M7 9v1.3M3.2 6.5h1.3M9.5 6.5h1.3M4.3 3.8l.9.9M8.8 8.3l.9.9M4.3 9.2l.9-.9M8.8 4.7l.9-.9"/>' +
+            '<g transform="translate(5,6) scale(0.75)">' + CLOUD + '</g>',
+    cloud: '<g transform="translate(0,-1) scale(0.98)">' + CLOUD + '</g>',
+    fog: CLOUD_UP + '<path d="M4.5 18.5h15M7 22h10"/>',
+    rain: CLOUD_UP + '<path d="M8.5 17.5l-1.4 3.4M12.5 17.5l-1.4 3.4M16.5 17.5l-1.4 3.4"/>',
+    snow: CLOUD_UP +
+      '<circle cx="8.5" cy="18.8" r="1.05" fill="currentColor" stroke="none"/>' +
+      '<circle cx="12.5" cy="21" r="1.05" fill="currentColor" stroke="none"/>' +
+      '<circle cx="16.5" cy="18.8" r="1.05" fill="currentColor" stroke="none"/>',
+    storm: CLOUD_UP + '<path d="M13 15.8l-2.5 3.5h2.9l-2.3 3.9"/>'
+  };
+  var ICON_OF = {0: "sun", 1: "partly", 2: "partly", 3: "cloud",
+                 45: "fog", 48: "fog",
+                 51: "rain", 53: "rain", 55: "rain",
+                 56: "rain", 57: "rain",
+                 61: "rain", 63: "rain", 65: "rain", 66: "rain", 67: "rain",
+                 71: "snow", 73: "snow", 75: "snow", 77: "snow",
+                 80: "rain", 81: "rain", 82: "rain",
+                 85: "snow", 86: "snow",
+                 95: "storm", 96: "storm", 99: "storm"};
+
+  function iconSvg(code, px) {
+    if (code == null || !ICONS[ICON_OF[code]]) return "";
+    return '<svg viewBox="0 0 24 24" width="' + px + '" height="' + px +
+      '" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' +
+      ICONS[ICON_OF[code]] + '</svg>';
+  }
 
   function el(id) { return document.getElementById(id); }
   function tempStr(c) {
@@ -51,6 +93,7 @@
     el("temp").textContent = "—";
     el("unit").textContent = "";
     el("cond").textContent = "—";
+    el("wicon").innerHTML = "";
     el("hilo").textContent = "";
     el("fc").textContent = "";
     el("place").textContent = hint;
@@ -73,6 +116,7 @@
     el("temp").textContent = tempStr(cur.temperature_2m);
     el("unit").textContent = isF ? "F" : "C";
     el("cond").textContent = wmoLabel(cur.weather_code);
+    el("wicon").innerHTML = iconSvg(cur.weather_code, 40);
     var res = wx.resolved || {};
     el("place").textContent =
       (res.name || loc) + (res.admin1 ? ", " + res.admin1 : "");
@@ -90,10 +134,18 @@
       // noon parse: a bare date is local, +T12:00 dodges the UTC-midnight shift
       var d = new Date(times[i] + "T12:00:00");
       var row = document.createElement("div");
-      row.textContent = (i === 0 ? "Today" : DOW[d.getDay()]) + "  " +
+      var ic = iconSvg((daily.weather_code || [])[i], 15);
+      if (ic) {
+        var badge = document.createElement("span");
+        badge.className = "fc-ic";
+        badge.innerHTML = ic;
+        row.appendChild(badge);
+      }
+      row.appendChild(document.createTextNode(
+        (i === 0 ? "Today" : DOW[d.getDay()]) + "  " +
         tempStr((daily.temperature_2m_max || [])[i]) + "/" +
         tempStr((daily.temperature_2m_min || [])[i]) + "  " +
-        wmoLabel((daily.weather_code || [])[i]);
+        wmoLabel((daily.weather_code || [])[i])));
       fc.appendChild(row);
     }
   }
