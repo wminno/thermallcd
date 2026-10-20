@@ -9,6 +9,10 @@
   #wicon svg { display: block; }
   #cond, #place, #hilo { margin-right: 205px; }   /* keep clear of the 200px icon */
   .fc-ic { display: inline-block; vertical-align: -10px; margin-right: 20px; }
+  /* slot-fit: one line per label, never wrap — fit() scales to the slot */
+  #cond, #place, #hilo, #fc > div {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 </style>
 </head>
 <body>
@@ -126,7 +130,63 @@
     el("place").textContent = hint;
   }
 
-  function rebuild(wx) {
+  // Slot-fit sizing: one scale factor derived from the slot the widget is
+  // actually in (the clock sizes its face to the slot each tick — same
+  // contract). The px values in the markup are the scale=1 ceiling; fit()
+  // only shrinks, so they stay the largest this slot allows.
+  var BASE_BIG = parseFloat(getComputedStyle(el("temp").parentNode).fontSize) || 0;
+  var scale = 1;
+  function px(v) { return Math.round(v * scale * 10) / 10; }
+  function applyScale() {
+    if (BASE_BIG) el("temp").parentNode.style.fontSize = px(BASE_BIG) + "px";
+    el("unit").style.fontSize = px(18) + "px";
+    el("cond").style.fontSize = px(54) + "px";
+    el("place").style.fontSize = px(42) + "px";
+    el("hilo").style.fontSize = px(42) + "px";
+    el("fc").style.fontSize = px(48) + "px";
+    ["cond", "place", "hilo"].forEach(function (id) {
+      el(id).style.marginRight = px(205) + "px";
+    });
+    el("wicon").style.width = el("wicon").style.height = px(200) + "px";
+    var m = el("wicon").querySelector("svg");
+    if (m) { m.setAttribute("width", px(200)); m.setAttribute("height", px(200)); }
+    [].forEach.call(el("fc").querySelectorAll(".fc-ic"), function (b) {
+      b.style.marginRight = px(20) + "px";
+      b.style.verticalAlign = px(-10) + "px";
+      var sv = b.querySelector("svg");
+      if (sv) { sv.setAttribute("width", px(45)); sv.setAttribute("height", px(45)); }
+    });
+  }
+
+  // Largest scale <= 1 whose content clears the slot vertically and keeps
+  // every label on one line (nowrap + overflow:hidden holds the line count
+  // steady; scrollWidth reveals what ellipsis would cut). The title and
+  // paddings don't shrink with the scale, so each ratio undershoots a
+  // little and a re-measure converges — three passes is plenty.
+  function fit() {
+    var card = el("card");
+    var texts = [el("cond"), el("place"), el("hilo")]
+      .concat([].slice.call(el("fc").children));
+    texts.forEach(function (e) { e.style.textOverflow = "clip"; });
+    scale = 1;
+    for (var i = 0; i < 3; i++) {
+      applyScale();
+      var room = window.innerHeight - card.offsetTop;
+      var need = Math.max(card.offsetHeight, px(200) + 2); // flow or the icon
+      var f = room > 0 ? room / need : 0;
+      texts.forEach(function (e) {
+        if (e.scrollWidth > e.clientWidth) f = Math.min(f, e.clientWidth / e.scrollWidth);
+      });
+      if (f >= 1) break;
+      scale = Math.max(0.3, scale * f);
+    }
+    texts.forEach(function (e) { e.style.textOverflow = "ellipsis"; });
+    applyScale();
+  }
+  window.addEventListener("resize", fit);
+
+  function rebuild(wx) { build(wx); fit(); }
+  function build(wx) {
     if (!loc) {                            // designed idle: nothing configured
       reset("set a location in the editor");
       return;
@@ -143,7 +203,7 @@
     el("temp").textContent = tempStr(cur.temperature_2m);
     el("unit").textContent = isF ? "F" : "C";
     el("cond").textContent = wmoLabel(cur.weather_code);
-    el("wicon").innerHTML = iconSvg(cur.weather_code, 200);
+    el("wicon").innerHTML = iconSvg(cur.weather_code, px(200));
     var res = wx.resolved || {};
     el("place").textContent =
       (res.name || loc) + (res.admin1 ? ", " + res.admin1 : "");
@@ -161,7 +221,7 @@
       // noon parse: a bare date is local, +T12:00 dodges the UTC-midnight shift
       var d = new Date(times[i] + "T12:00:00");
       var row = document.createElement("div");
-      var ic = iconSvg((daily.weather_code || [])[i], 45);
+      var ic = iconSvg((daily.weather_code || [])[i], px(45));
       if (ic) {
         var badge = document.createElement("span");
         badge.className = "fc-ic";
