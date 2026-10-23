@@ -1028,7 +1028,7 @@ class TestWeatherWidget(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertNotIn("error", entry)
         self.assertEqual([o["key"] for o in entry["options"]],
-                         ["view", "location", "units"])
+                         ["view", "location", "units", "iconstyle"])
         self.assertEqual([c["value"] for c in entry["options"][0]["choices"]],
                          ["current", "today", "forecast"])
         # autocomplete wiring (T20): the option spec survives normalization

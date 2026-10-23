@@ -73,6 +73,28 @@ def find_chromium() -> str:
     )
 
 
+def _is_snap_chromium(binpath: str) -> bool:
+    # snap entry points resolve through snapd's launcher (/usr/bin/snap or
+    # /snap/bin/...); a real (non-snap) chromium keeps its own ELF path
+    real = os.path.realpath(binpath)
+    return "/snap/" in binpath or "/snap/" in real or real == "/usr/bin/snap"
+
+
+def user_profile_dir(binpath: str, device: str) -> str:
+    """Per-panel chromium profile dir (T15).
+
+    Snap chromium (strict confinement) cannot touch hidden directories, so a
+    --user-data-dir under ~/.cache is silently IGNORED: the browser falls back
+    to the shared default profile and two panels would fight over the
+    SingletonLock. The snap's user-common area is the nearest always-writable
+    spot; a non-snap chromium has no such restriction.
+    """
+    if _is_snap_chromium(binpath):
+        return os.path.expanduser(
+            "~/snap/chromium/common/thermallcd-capture-" + device)
+    return os.path.expanduser("~/.cache/thermallcd-capture-" + device)
+
+
 def _is_exe(path: str) -> bool:
     import os
 
@@ -120,9 +142,10 @@ class Chromium:
                 "--disable-component-update",
                 "--disable-sync",
                 "--disable-domain-reliability",
-                # snap chromium (strict confinement) can only write under $HOME;
                 # per-panel dirs (T15) — two headless instances sharing one
-                # profile dir would fight over the SingletonLock
+                # profile dir would fight over the SingletonLock; snap
+                # chromium cannot write hidden dirs, so user_profile_dir()
+                # picks a snap-writable path when the binary is the snap
                 "--user-data-dir=" + self.user_data_dir,
                 self.url,
             ],
@@ -139,6 +162,10 @@ class Chromium:
                     return
             except Exception:
                 time.sleep(0.2)
+        # start() runs before main()'s try/finally, so nothing has cleaned the
+        # child up yet — raising without this leaks a chromium holding the
+        # profile SingletonLock (every boot-restart retry would then fail too)
+        self.stop()
         raise RuntimeError(f"chromium CDP endpoint did not come up on port {self.port}")
 
     def page_ws_url(self) -> str:
@@ -372,8 +399,7 @@ def main(argv=None):
         _write_profile(args.data, args.device, device, info)
 
     chromium = Chromium(args.url, port=args.port, width=size[0], height=size[1],
-                        user_data_dir=os.path.expanduser(
-                            "~/.cache/thermallcd-capture-" + args.device))
+                        user_data_dir=user_profile_dir(find_chromium(), args.device))
     profile_path = Path(args.data) / "profiles" / f"{args.device}.json"
 
     def on_frame(jpeg: bytes):
